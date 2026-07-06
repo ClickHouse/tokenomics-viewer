@@ -5,6 +5,8 @@ coverage/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+report*.json
+reports/
 .env
 .env.*
 .DS_Store

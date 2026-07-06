@@ -1564,7 +1564,7 @@ function printRateLimitSection(report, top) {
 
 function renderTextReport(report, options) {
   const lines = [];
-  lines.push("Tokenomics");
+  lines.push("Tokenomics Viewer");
   lines.push(`Sources: files=${formatInt(report.sources.files)}, zip_files=${formatInt(report.sources.zipFiles)}, zip_entries=${formatInt(report.sources.zipEntries)}, skipped=${formatInt(report.sources.skippedFiles)}, token_count_snapshots=${formatInt(report.sources.tokenCountSnapshots)}, skipped_token_count_snapshots=${formatInt(report.sources.skippedTokenCountSnapshots)}, parse_errors=${formatInt(report.sources.parseErrors)}`);
   lines.push(`Pricing sources: OpenAI=${PRICING_SOURCES.openai}; OpenAI models=${PRICING_SOURCES.openaiGpt5}; OpenAI Codex=${PRICING_SOURCES.openaiCodex}; Anthropic=${PRICING_SOURCES.anthropic}`);
   lines.push(`OpenAI context pricing mode: ${options.openaiContext}`);
@@ -2271,7 +2271,7 @@ function dashboardHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tokenomics</title>
+  <title>Tokenomics Viewer</title>
   <style>
     :root { color-scheme: light dark; --bg:#f7f7f4; --fg:#202124; --muted:#687076; --line:#d9d9d2; --panel:#ffffff; --accent:#2563eb; --cache:#0f9f6e; --out:#c2410c; --warn:#b45309; }
     @media (prefers-color-scheme: dark) { :root { --bg:#111315; --fg:#f2f2ef; --muted:#a6adb4; --line:#30343a; --panel:#181b1f; --accent:#6ea8fe; --cache:#39d39f; --out:#ff9a62; --warn:#f5c36b; } }
@@ -2302,7 +2302,7 @@ function dashboardHtml() {
 </head>
 <body>
   <header>
-    <h1>Tokenomics</h1>
+    <h1>Tokenomics Viewer</h1>
     <div class="muted" id="updated">Loading...</div>
   </header>
   <main>

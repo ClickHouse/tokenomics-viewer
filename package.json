@@ -1,7 +1,7 @@
 {
-  "name": "tokenomics",
+  "name": "tokenomics-viewer",
   "version": "0.0.1",
-  "description": "Counts tokens per session and counts different buckets (per project, per day, per week, per month, total)",
+  "description": "View token usage, costs, and rate-limit metrics from Codex and Claude Code sessions",
   "keywords": [
     "codex",
     "claude",
@@ -12,6 +12,18 @@
   "author": "Sergey Kuznetsov <github@rigelstar.com>",
   "type": "commonjs",
   "main": "app.js",
+  "files": [
+    "app.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "tokenomics-viewer": "./app.js",
+    "tokenomics": "./app.js"
+  },
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
     "start": "node app.js",
     "test": "node --test"
