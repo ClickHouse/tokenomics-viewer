@@ -5,6 +5,12 @@ coverage/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+.clickhouse/
+clickhouse
+.playwright-cli/
+.playwright-mcp/
+tokenomics-daily-token-flow*.png
+tokenomics-project*.png
 report*.json
 reports/
 .env

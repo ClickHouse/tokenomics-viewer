@@ -1,0 +1,835 @@
+ <!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tokenomics Viewer</title>
+  <style>
+    :root { color-scheme: light dark; --bg:#f7f7f4; --fg:#202124; --muted:#687076; --line:#d9d9d2; --panel:#ffffff; --accent:#2563eb; --cache:#0f9f6e; --out:#c2410c; --warn:#b45309; --axis:#8b949e; --grid:rgba(104,112,118,.22); }
+    @media (prefers-color-scheme: dark) { :root { --bg:#111315; --fg:#f2f2ef; --muted:#a6adb4; --line:#30343a; --panel:#181b1f; --accent:#6ea8fe; --cache:#39d39f; --out:#ff9a62; --warn:#f5c36b; --axis:#89929b; --grid:rgba(166,173,180,.18); } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-x:hidden; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 24px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; }
+    h1 { margin:0; font-size:20px; letter-spacing:0; }
+    main { padding:24px; display:grid; gap:18px; max-width:1440px; margin:0 auto; }
+    .cards { display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap:12px; }
+    .card, section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; min-width:0; }
+    .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .value { font-size:clamp(20px, 2.3vw, 28px); font-weight:700; margin-top:4px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+    .token-card .value { font-size:clamp(16px, 1.55vw, 22px); white-space:nowrap; }
+    .grid { display:grid; grid-template-columns: minmax(0, 1.45fr) minmax(360px, .75fr); gap:18px; align-items:start; }
+    .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+    h2 { margin:0; font-size:16px; }
+    .control-select { max-width:min(540px, 100%); min-width:240px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--fg); padding:6px 28px 6px 8px; font:inherit; }
+    .segmented { display:inline-flex; align-items:center; gap:2px; border:1px solid var(--line); border-radius:6px; padding:2px; background:rgba(127,127,127,.07); }
+    .seg-button { border:0; border-radius:4px; background:transparent; color:var(--muted); padding:5px 8px; font:inherit; font-size:12px; cursor:pointer; }
+    .seg-button.active { background:var(--panel); color:var(--fg); box-shadow:0 0 0 1px var(--line); }
+    .legend { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; color:var(--muted); font-size:12px; }
+    .legend-item { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+    .swatch { width:10px; height:10px; border-radius:999px; display:inline-block; }
+    .chart-wrap { position:relative; min-height:390px; }
+    .wide-section { min-height:480px; }
+    .project-chart-wrap { position:relative; min-height:390px; }
+    .mix-canvas { width:100%; height:390px; display:block; cursor:crosshair; touch-action:none; }
+    .chart-grid-line { stroke:var(--grid); stroke-width:1; }
+    .chart-axis { stroke:var(--axis); stroke-width:1; }
+    .chart-label { fill:var(--muted); font-size:11px; }
+    .chart-series { fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-width:2.4; }
+    .chart-point { stroke:var(--panel); stroke-width:1.5; }
+    .chart-point:hover { stroke:var(--fg); stroke-width:2; }
+    .chart-empty { color:var(--muted); min-height:120px; display:flex; align-items:center; }
+    table { width:100%; border-collapse:collapse; min-width:860px; }
+    th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+    th:first-child, td:first-child { text-align:left; }
+    th { color:var(--muted); font-weight:600; font-size:12px; }
+    td:first-child { max-width:520px; overflow:hidden; text-overflow:ellipsis; }
+    .table-scroll { overflow:auto; max-width:100%; }
+    .seg-input { background:var(--accent); }
+    .seg-cache { background:var(--cache); }
+    .seg-output { background:var(--out); }
+    .hover-legend { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; min-height:24px; color:var(--muted); font-size:12px; }
+    .hover-legend strong { color:var(--fg); font-weight:650; max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .mix-pill { display:inline-flex; align-items:center; gap:5px; padding:3px 7px; border:1px solid var(--line); border-radius:999px; background:rgba(127,127,127,.07); white-space:nowrap; }
+    .muted { color:var(--muted); }
+    @media (max-width: 1180px) { .cards { grid-template-columns:repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 1000px) { .grid { grid-template-columns:1fr; } header { align-items:flex-start; flex-direction:column; } .chart-wrap, .project-chart-wrap { min-height:330px; } .mix-canvas { height:330px; } }
+    @media (max-width: 680px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 560px) { main { padding:14px; } .panel-head { display:grid; } .cards { gap:10px; } }
+    @media (max-width: 420px) { .cards { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Tokenomics Viewer</h1>
+    <div class="muted" id="updated">Loading...</div>
+  </header>
+  <main>
+    <div class="cards" id="cards"></div>
+    <div class="grid">
+      <section>
+        <div class="panel-head">
+          <div>
+            <h2>Daily Token Flow</h2>
+            <div class="hover-legend" id="daily-token-hover-legend"></div>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas class="mix-canvas" id="daily-token-canvas" role="img" aria-label="Daily input, cache, and output token mix"></canvas></div>
+      </section>
+      <section>
+        <div class="panel-head">
+          <div>
+            <h2>Cost Mix</h2>
+            <div class="hover-legend" id="cost-mix-hover-legend"></div>
+          </div>
+          <div class="segmented" id="cost-mix-controls" aria-label="Cost mix period">
+            <button class="seg-button" type="button" data-mix-mode="daily">Daily</button>
+            <button class="seg-button" type="button" data-mix-mode="weekly">Weekly</button>
+            <button class="seg-button" type="button" data-mix-mode="monthly">Monthly</button>
+            <button class="seg-button" type="button" data-mix-mode="models">Models</button>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas class="mix-canvas" id="cost-mix-canvas" role="img" aria-label="Cost mix by selected period"></canvas></div>
+      </section>
+    </div>
+    <section class="wide-section">
+      <div class="panel-head">
+        <div>
+          <h2>Project Daily Cost Mix</h2>
+          <select class="control-select" id="project-select" aria-label="Project"></select>
+        </div>
+        <div class="hover-legend" id="project-hover-legend"></div>
+      </div>
+      <div class="project-chart-wrap">
+        <canvas class="mix-canvas" id="project-cost-canvas" role="img" aria-label="Daily project cost with input, cache, and output cost mix"></canvas>
+      </div>
+    </section>
+    <section>
+      <div class="panel-head">
+        <h2>Efficiency Metrics</h2>
+      </div>
+      <div class="table-scroll">
+        <table id="efficiency-table"></table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const compact = new Intl.NumberFormat('en-US', { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 });
+    const compactUsd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 });
+    const colors = {
+      input: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+      cache: getComputedStyle(document.documentElement).getPropertyValue('--cache').trim(),
+      output: getComputedStyle(document.documentElement).getPropertyValue('--out').trim(),
+      fg: getComputedStyle(document.documentElement).getPropertyValue('--fg').trim(),
+      muted: getComputedStyle(document.documentElement).getPropertyValue('--muted').trim(),
+      panel: getComputedStyle(document.documentElement).getPropertyValue('--panel').trim(),
+      line: getComputedStyle(document.documentElement).getPropertyValue('--line').trim(),
+      grid: getComputedStyle(document.documentElement).getPropertyValue('--grid').trim(),
+      axis: getComputedStyle(document.documentElement).getPropertyValue('--axis').trim(),
+    };
+    const pct = (part, total) => total > 0 ? Math.max(0, (part / total) * 100) : 0;
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+    function tokenCache(row) {
+      return (row.cacheRead || 0) + (row.cacheCreate5m || 0) + (row.cacheCreate30m || 0) + (row.cacheCreate1h || 0);
+    }
+
+    function formatTokenCount(value) {
+      return compact.format(value || 0);
+    }
+
+    function formatUsdCompact(value) {
+      return Math.abs(value || 0) >= 1_000 ? compactUsd.format(value || 0) : usd.format(value || 0);
+    }
+
+    function card(label, value, className = '') {
+      return '<div class="card ' + esc(className) + '"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div></div>';
+    }
+
+    function costMix(stats = {}) {
+      const costs = stats.costsUsd || {};
+      const input = costs.input || 0;
+      const cache = (costs.cacheRead || 0) + (costs.cacheCreate5m || 0) + (costs.cacheCreate30m || 0) + (costs.cacheCreate1h || 0);
+      const output = costs.output || 0;
+      const total = input + cache + output;
+      return {
+        input,
+        cache,
+        output,
+        total,
+        inputPct: total > 0 ? input / total : 0,
+        cachePct: total > 0 ? cache / total : 0,
+        outputPct: total > 0 ? output / total : 0,
+      };
+    }
+
+    function formatPct(value) {
+      return Number.isFinite(value) ? (value * 100).toFixed(1) + '%' : '0.0%';
+    }
+
+    function segmentCost(row = {}, key) {
+      const costs = row.costsUsd || {};
+      if (key === 'cache') return (costs.cacheRead || 0) + (costs.cacheCreate5m || 0) + (costs.cacheCreate30m || 0) + (costs.cacheCreate1h || 0);
+      return costs[key] || 0;
+    }
+
+    function segmentTokens(row = {}, key) {
+      if (key === 'cache') return tokenCache(row);
+      return row[key] || 0;
+    }
+
+    function segmentShareText(row, segment, mix) {
+      const share = mix[segment.pctKey] || 0;
+      return formatTokenCount(segmentTokens(row, segment.key)) + ' tokens / ' +
+        formatUsdCompact(segmentCost(row, segment.key)) + ' / ' +
+        formatPct(share);
+    }
+
+    function segmentCardText(row, key) {
+      const mix = costMix(row);
+      const share = mix[key + 'Pct'] || 0;
+      return formatTokenCount(segmentTokens(row, key)) + ' / ' +
+        formatUsdCompact(segmentCost(row, key)) + ' / ' +
+        formatPct(share);
+    }
+
+    function totalTokens(row = {}) {
+      return (row.input || 0) + tokenCache(row) + (row.output || 0);
+    }
+
+    function pricedTokenCache(row = {}) {
+      return (row.pricedCacheRead || 0) + (row.pricedCacheCreate5m || 0) + (row.pricedCacheCreate30m || 0) + (row.pricedCacheCreate1h || 0);
+    }
+
+    function pricedOutputTokens(row = {}) {
+      if (row.pricedOutput > 0) return row.pricedOutput;
+      if (row.pricedRequests > 0 && row.pricedRequests === row.requests) return row.output || 0;
+      return 0;
+    }
+
+    function pricedTotalTokens(row = {}) {
+      const explicit = (row.pricedInput || 0) + pricedTokenCache(row) + (row.pricedOutput || 0);
+      if (explicit > 0) return explicit;
+      if (row.pricedRequests > 0 && row.pricedRequests === row.requests) return totalTokens(row);
+      return 0;
+    }
+
+    function pricedCost(row = {}) {
+      return row.pricedRequests > 0 ? (row.costUsd || 0) : null;
+    }
+
+    function outputCharsPerTokenAvg(row = {}) {
+      return row.outputCharTokenSamples > 0 ? (row.outputCharsPerTokenSum || 0) / row.outputCharTokenSamples : 0;
+    }
+
+    function formatDecimal(value, digits = 2) {
+      return Number.isFinite(value) ? value.toFixed(digits) : '-';
+    }
+
+    function formatCharTokenRange(row = {}) {
+      if (!row.outputCharTokenSamples) return '-';
+      return [
+        row.outputCharsPerTokenP10 ?? row.outputCharsPerTokenMin,
+        outputCharsPerTokenAvg(row),
+        row.outputCharsPerTokenP99 ?? row.outputCharsPerTokenMax,
+      ].map(value => formatDecimal(value, 2)).join(' / ');
+    }
+
+    function totalCostPerMillionOutput(row = {}) {
+      const output = pricedOutputTokens(row);
+      return output > 0 ? ((row.costUsd || 0) / output) * 1_000_000 : null;
+    }
+
+    function outputCostPerMillionOutput(row = {}) {
+      const output = pricedOutputTokens(row);
+      return output > 0 ? (segmentCost(row, 'output') / output) * 1_000_000 : null;
+    }
+
+    function avgPricedCost(row = {}) {
+      return row.pricedRequests > 0 ? (row.costUsd || 0) / row.pricedRequests : null;
+    }
+
+    function formatNullableUsd(value) {
+      return Number.isFinite(value) ? usd.format(value) : 'n/a';
+    }
+
+    function formatRatio(part, total) {
+      return total > 0 ? formatPct(part / total) : 'n/a';
+    }
+
+    function pricedShare(row = {}) {
+      return row.requests > 0 ? (row.pricedRequests || 0) / row.requests : 0;
+    }
+
+    function tokenMix(row = {}) {
+      const input = row.input || 0;
+      const cache = tokenCache(row);
+      const output = row.output || 0;
+      const total = input + cache + output;
+      return {
+        input,
+        cache,
+        output,
+        total,
+        inputPct: total > 0 ? input / total : 0,
+        cachePct: total > 0 ? cache / total : 0,
+        outputPct: total > 0 ? output / total : 0,
+      };
+    }
+
+    function tickIndexes(count, target) {
+      if (count <= 1) return [0];
+      const steps = Math.min(target, count - 1);
+      const seen = new Set();
+      for (let i = 0; i <= steps; i += 1) seen.add(Math.round((i * (count - 1)) / steps));
+      return [...seen].sort((a, b) => a - b);
+    }
+
+    function tokenScale(value) {
+      return Math.log10(Math.max(0, value) + 1);
+    }
+
+    function moneyScale(value) {
+      return Math.log10(Math.max(0, value) + 1);
+    }
+
+    function projectLabel(name) {
+      const text = String(name || '(unknown project)');
+      const parts = text.split('/').filter(Boolean);
+      return parts.at(-1) || text;
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function sizeCanvas(canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(720, Math.floor(rect.width || 720));
+      const height = Math.max(320, Math.floor(rect.height || 390));
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, width, height };
+    }
+
+    function drawCanvasCatmullRom(ctx, points, tension = 1) {
+      if (!points.length) return;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 0; i < points.length - 1; i += 1) {
+        const p0 = points[i - 1] || points[i];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[i + 2] || p2;
+        const cp1x = p1.x + ((p2.x - p0.x) / 6) * tension;
+        const cp1y = p1.y + ((p2.y - p0.y) / 6) * tension;
+        const cp2x = p2.x - ((p3.x - p1.x) / 6) * tension;
+        const cp2y = p2.y - ((p3.y - p1.y) / 6) * tension;
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+      }
+    }
+
+    const projectChart = {
+      canvasId: 'project-cost-canvas',
+      legendId: 'project-hover-legend',
+      rows: [],
+      selectedProject: null,
+      selectedProjectName: null,
+      nodes: [],
+      hoverIndex: 0,
+      dragStartX: null,
+      dragCurrentX: null,
+      plot: null,
+      zoom: { start: 0, end: 0 },
+      dataKey: null,
+      config: null,
+    };
+    function createSharedMixChart(canvasId, legendId) {
+      return {
+        canvasId,
+        legendId,
+        rows: [],
+        nodes: [],
+        zoom: { start: 0, end: 0 },
+        hoverIndex: 0,
+        dragStartX: null,
+        dragCurrentX: null,
+        plot: null,
+        dataKey: null,
+        config: null,
+      };
+    }
+
+    const dailyTokenChart = createSharedMixChart('daily-token-canvas', 'daily-token-hover-legend');
+    const costChart = createSharedMixChart('cost-mix-canvas', 'cost-mix-hover-legend');
+    const sharedMixSegments = [
+      { key: 'input', pctKey: 'inputPct', label: 'In', color: () => colors.input },
+      { key: 'cache', pctKey: 'cachePct', label: 'Cache', color: () => colors.cache },
+      { key: 'output', pctKey: 'outputPct', label: 'Out', color: () => colors.output },
+    ];
+
+    function sharedMixKey(rows, config) {
+      return config.key + '|' + rows.map(row => row.name).join('\\u0000');
+    }
+
+    function visibleSharedRange(chart) {
+      const count = chart.rows.length;
+      if (count === 0) return { start: 0, end: -1 };
+      return {
+        start: clamp(chart.zoom.start, 0, count - 1),
+        end: clamp(chart.zoom.end, 0, count - 1),
+      };
+    }
+
+    function rerenderSharedMixChart(chart) {
+      if (chart.config) renderSharedMixChart(chart, chart.rows, chart.config);
+    }
+
+    function applySharedZoom(chart, start, end) {
+      const count = chart.rows.length;
+      if (count === 0) return;
+      let nextStart = Math.round(Math.min(start, end));
+      let nextEnd = Math.round(Math.max(start, end));
+      const minWindow = Math.min(3, count);
+      if (nextEnd - nextStart + 1 < minWindow) {
+        const center = (nextStart + nextEnd) / 2;
+        nextStart = Math.round(center - (minWindow - 1) / 2);
+        nextEnd = nextStart + minWindow - 1;
+      }
+      if (nextStart < 0) {
+        nextEnd -= nextStart;
+        nextStart = 0;
+      }
+      if (nextEnd >= count) {
+        nextStart -= nextEnd - count + 1;
+        nextEnd = count - 1;
+      }
+      chart.zoom.start = clamp(nextStart, 0, count - 1);
+      chart.zoom.end = clamp(nextEnd, chart.zoom.start, count - 1);
+      rerenderSharedMixChart(chart);
+    }
+
+    function zoomSharedChartAt(chart, canvasX, direction) {
+      const count = chart.rows.length;
+      if (count <= 1 || !chart.plot) return;
+      const range = visibleSharedRange(chart);
+      const currentLength = range.end - range.start + 1;
+      const factor = direction < 0 ? 0.72 : 1.38;
+      let nextLength = clamp(Math.round(currentLength * factor), Math.min(3, count), count);
+      if (nextLength === currentLength) nextLength = clamp(currentLength + (direction < 0 ? -1 : 1), Math.min(3, count), count);
+      const ratio = clamp((canvasX - chart.plot.left) / chart.plot.width, 0, 1);
+      const anchor = range.start + ratio * (currentLength - 1);
+      const nextStart = Math.round(anchor - ratio * (nextLength - 1));
+      applySharedZoom(chart, nextStart, nextStart + nextLength - 1);
+    }
+
+    function sharedIndexFromX(chart, canvasX) {
+      const range = visibleSharedRange(chart);
+      if (!chart.plot || range.end < range.start) return 0;
+      const count = range.end - range.start + 1;
+      if (count <= 1) return range.start;
+      const ratio = clamp((canvasX - chart.plot.left) / chart.plot.width, 0, 1);
+      return clamp(Math.round(range.start + ratio * (count - 1)), range.start, range.end);
+    }
+
+    function drawSharedSelection(ctx, chart) {
+      if (chart.dragStartX == null || chart.dragCurrentX == null || !chart.plot) return;
+      const x1 = clamp(chart.dragStartX, chart.plot.left, chart.plot.left + chart.plot.width);
+      const x2 = clamp(chart.dragCurrentX, chart.plot.left, chart.plot.left + chart.plot.width);
+      const left = Math.min(x1, x2);
+      const width = Math.abs(x2 - x1);
+      if (width < 2) return;
+      ctx.save();
+      ctx.fillStyle = 'rgba(37, 99, 235, .14)';
+      ctx.strokeStyle = colors.accent;
+      ctx.lineWidth = 1;
+      ctx.fillRect(left, chart.plot.top, width, chart.plot.height);
+      ctx.strokeRect(left, chart.plot.top, width, chart.plot.height);
+      ctx.restore();
+    }
+
+    function drawSharedMixNode(ctx, node, active, config) {
+      const mix = config.mix(node.row);
+      const radius = active ? 7 : 5.5;
+      let start = -Math.PI / 2;
+      ctx.save();
+      ctx.lineWidth = active ? 3 : 2;
+      for (const segment of sharedMixSegments) {
+        const value = mix[segment.pctKey] || 0;
+        if (value <= 0) continue;
+        const end = start + value * Math.PI * 2;
+        ctx.beginPath();
+        ctx.strokeStyle = segment.color();
+        ctx.arc(node.x, node.y, radius, start, end);
+        ctx.stroke();
+        start = end;
+      }
+      ctx.beginPath();
+      ctx.fillStyle = colors.panel;
+      ctx.arc(node.x, node.y, Math.max(2, radius - 3), 0, Math.PI * 2);
+      ctx.fill();
+      if (active) {
+        ctx.beginPath();
+        ctx.strokeStyle = colors.fg;
+        ctx.lineWidth = 1.5;
+        ctx.arc(node.x, node.y, radius + 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function renderSharedMixLegend(chart, row, config) {
+      const el = document.getElementById(chart.legendId);
+      if (!el) return;
+      if (!row) {
+        el.innerHTML = '<span class="muted">' + esc(config.emptyText) + '</span>';
+        return;
+      }
+      const mix = config.mix(row);
+      el.innerHTML =
+        '<strong title="' + esc(config.title(row)) + '">' + esc(config.displayTitle(row)) + '</strong>' +
+        '<span>' + esc(config.valueText(row)) + '</span>' +
+        sharedMixSegments.map(segment => (
+          '<span class="mix-pill"><span class="swatch" style="background:' + esc(segment.color()) + '"></span>' +
+          esc(segment.label) + ' ' + esc(segmentShareText(row, segment, mix)) + '</span>'
+        )).join('');
+    }
+
+    function renderSharedMixChart(chart, rows, config) {
+      const canvas = document.getElementById(chart.canvasId);
+      if (!canvas) return;
+      const nextRows = rows || [];
+      const nextKey = sharedMixKey(nextRows, config);
+      const dataChanged = nextKey !== chart.dataKey;
+      chart.rows = nextRows;
+      chart.config = config;
+      chart.dataKey = nextKey;
+      const { ctx, width, height } = sizeCanvas(canvas);
+      ctx.clearRect(0, 0, width, height);
+      if (chart.rows.length === 0) {
+        chart.nodes = [];
+        chart.plot = null;
+        renderSharedMixLegend(chart, null, config);
+        ctx.save();
+        ctx.fillStyle = colors.muted;
+        ctx.font = '13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.fillText(config.emptyText, 24, 48);
+        ctx.restore();
+        return;
+      }
+      if (dataChanged || chart.zoom.end <= chart.zoom.start || chart.zoom.end >= chart.rows.length) {
+        chart.zoom.start = 0;
+        chart.zoom.end = chart.rows.length - 1;
+        chart.hoverIndex = 0;
+      }
+
+      const margin = { top: 24, right: 24, bottom: 78, left: 78 };
+      const plot = { left: margin.left, top: margin.top, width: width - margin.left - margin.right, height: height - margin.top - margin.bottom };
+      chart.plot = plot;
+      const range = visibleSharedRange(chart);
+      const visible = chart.rows.slice(range.start, range.end + 1);
+      const maxValue = Math.max(1, ...visible.map(row => config.value(row)));
+      const maxScaled = Math.max(1, config.scale(maxValue));
+      const x = index => plot.left + (visible.length === 1 ? plot.width / 2 : (index / (visible.length - 1)) * plot.width);
+      const y = value => plot.top + plot.height - (config.scale(value) / maxScaled) * plot.height;
+
+      ctx.save();
+      ctx.font = '11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textBaseline = 'middle';
+      for (const tick of [0, .25, .5, .75, 1]) {
+        const yy = plot.top + plot.height - tick * plot.height;
+        ctx.strokeStyle = colors.grid;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(plot.left, yy);
+        ctx.lineTo(plot.left + plot.width, yy);
+        ctx.stroke();
+        ctx.fillStyle = colors.muted;
+        ctx.textAlign = 'right';
+        ctx.fillText(config.axisText(Math.max(0, (10 ** (maxScaled * tick)) - 1)), plot.left - 10, yy);
+      }
+
+      ctx.strokeStyle = colors.axis;
+      ctx.beginPath();
+      ctx.moveTo(plot.left, plot.top);
+      ctx.lineTo(plot.left, plot.top + plot.height);
+      ctx.lineTo(plot.left + plot.width, plot.top + plot.height);
+      ctx.stroke();
+
+      for (const index of tickIndexes(visible.length, width < 760 ? 5 : 8)) {
+        const xx = x(index);
+        const rawLabel = config.xLabel(visible[index]);
+        const label = rawLabel.length > 22 ? rawLabel.slice(0, 21) + '…' : rawLabel;
+        ctx.strokeStyle = colors.axis;
+        ctx.beginPath();
+        ctx.moveTo(xx, plot.top + plot.height);
+        ctx.lineTo(xx, plot.top + plot.height + 5);
+        ctx.stroke();
+        ctx.save();
+        ctx.translate(xx, plot.top + plot.height + 14);
+        ctx.rotate(-Math.PI / 7);
+        ctx.fillStyle = colors.muted;
+        ctx.textAlign = 'right';
+        ctx.fillText(label, 0, 0);
+        ctx.restore();
+      }
+
+      const points = visible.map((row, index) => ({ x: x(index), y: y(config.value(row)), row, globalIndex: range.start + index }));
+      ctx.strokeStyle = colors.fg;
+      ctx.globalAlpha = .55;
+      ctx.lineWidth = 2.2;
+      drawCanvasCatmullRom(ctx, points, .9);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      chart.nodes = points;
+      const activeIndex = clamp(chart.hoverIndex == null ? range.start : chart.hoverIndex, range.start, range.end);
+      chart.hoverIndex = activeIndex;
+      for (const point of points) drawSharedMixNode(ctx, point, point.globalIndex === activeIndex, config);
+
+      ctx.fillStyle = colors.muted;
+      ctx.textAlign = 'center';
+      ctx.save();
+      ctx.translate(18, plot.top + plot.height / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(config.yLabel, 0, 0);
+      ctx.restore();
+
+      drawSharedSelection(ctx, chart);
+      renderSharedMixLegend(chart, chart.rows[clamp(activeIndex, range.start, range.end)] || visible[0], config);
+      ctx.restore();
+    }
+
+    function renderProjectDailyChart(selectedProject) {
+      projectChart.selectedProject = selectedProject || null;
+      projectChart.selectedProjectName = selectedProject?.name || null;
+      renderSharedMixChart(projectChart, selectedProject?.daily || [], {
+        key: 'project-' + (selectedProject?.name || ''),
+        emptyText: selectedProject ? 'No daily project data' : 'No projects',
+        yLabel: 'daily project cost (log)',
+        value: row => row.costUsd || 0,
+        valueText: row => formatUsdCompact(row.costUsd || 0),
+        axisText: value => formatUsdCompact(value),
+        scale: moneyScale,
+        mix: costMix,
+        title: row => selectedProject ? selectedProject.name + ' · ' + row.name : row.name,
+        displayTitle: row => selectedProject ? projectLabel(selectedProject.name) + ' · ' + row.name : row.name,
+        xLabel: row => row.name,
+      });
+    }
+
+    function renderDailyTokenChart(rows) {
+      renderSharedMixChart(dailyTokenChart, rows || [], {
+        key: 'daily-token',
+        emptyText: 'No daily token data',
+        yLabel: 'tokens/day (log)',
+        value: row => totalTokens(row),
+        valueText: row => formatTokenCount(totalTokens(row)) + ' tokens',
+        axisText: value => formatTokenCount(value),
+        scale: tokenScale,
+        mix: tokenMix,
+        title: row => row.name,
+        displayTitle: row => row.name,
+        xLabel: row => row.name.slice(5) || row.name,
+      });
+    }
+
+    function bindSharedMixCanvas(chart) {
+      const canvas = document.getElementById(chart.canvasId);
+      if (!canvas) return;
+      canvas.addEventListener('mousemove', event => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        let nearest = null;
+        let nearestDistance = Infinity;
+        for (const node of chart.nodes) {
+          const distance = Math.hypot(node.x - x, node.y - y);
+          if (distance < nearestDistance) {
+            nearest = node;
+            nearestDistance = distance;
+          }
+        }
+        if (nearest && nearestDistance <= 18) {
+          chart.hoverIndex = nearest.globalIndex;
+          rerenderSharedMixChart(chart);
+        }
+        if (chart.dragStartX != null) {
+          chart.dragCurrentX = x;
+          rerenderSharedMixChart(chart);
+        }
+      });
+      canvas.addEventListener('mouseleave', () => {
+        chart.dragStartX = null;
+        chart.dragCurrentX = null;
+        rerenderSharedMixChart(chart);
+      });
+      canvas.addEventListener('mousedown', event => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        if (!chart.plot || x < chart.plot.left || x > chart.plot.left + chart.plot.width) return;
+        chart.dragStartX = x;
+        chart.dragCurrentX = x;
+      });
+      window.addEventListener('mouseup', event => {
+        if (chart.dragStartX == null) return;
+        const rect = canvas.getBoundingClientRect();
+        const endX = event.clientX - rect.left;
+        const startX = chart.dragStartX;
+        chart.dragStartX = null;
+        chart.dragCurrentX = null;
+        if (Math.abs(endX - startX) < 14) {
+          rerenderSharedMixChart(chart);
+          return;
+        }
+        if (endX > startX) {
+          applySharedZoom(chart, sharedIndexFromX(chart, startX), sharedIndexFromX(chart, endX));
+        } else {
+          zoomSharedChartAt(chart, (startX + endX) / 2, 1);
+        }
+      });
+      canvas.addEventListener('wheel', event => {
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        zoomSharedChartAt(chart, event.clientX - rect.left, event.deltaY);
+      }, { passive: false });
+      canvas.addEventListener('dblclick', () => {
+        chart.zoom.start = 0;
+        chart.zoom.end = Math.max(0, chart.rows.length - 1);
+        rerenderSharedMixChart(chart);
+      });
+    }
+
+    let cachedSummary = null;
+    let costMixMode = 'models';
+
+    function costMixRows(summary) {
+      const source = costMixMode === 'models' ? summary.topModels : (summary[costMixMode] || []);
+      return [...source].sort((a, b) => (b.costUsd || 0) - (a.costUsd || 0)).slice(0, 15);
+    }
+
+    function renderCostMixControls() {
+      document.querySelectorAll('#cost-mix-controls [data-mix-mode]').forEach(button => {
+        button.classList.toggle('active', button.dataset.mixMode === costMixMode);
+      });
+    }
+
+    function renderCostMix(summary) {
+      renderCostMixControls();
+      const rows = costMixRows(summary);
+      renderSharedMixChart(costChart, rows, {
+        key: 'cost-' + costMixMode,
+        emptyText: 'No cost data',
+        yLabel: 'cost (log)',
+        value: row => row.costUsd || 0,
+        valueText: row => formatUsdCompact(row.costUsd || 0),
+        axisText: value => formatUsdCompact(value),
+        scale: moneyScale,
+        mix: costMix,
+        title: row => row.name,
+        displayTitle: row => row.name,
+        xLabel: row => row.name,
+      });
+    }
+
+    function renderEfficiency(summary) {
+      const table = document.getElementById('efficiency-table');
+      if (!table) return;
+      const rows = summary.topEfforts || [];
+      table.innerHTML = '<thead><tr>' +
+        '<th>Effort</th><th>Requests</th><th>Priced</th><th>Cost (priced)</th><th>Avg $/priced request</th>' +
+        '<th>Total $/1M priced out</th><th>Output $/1M priced out</th><th>Cache (priced)</th><th>Reasoning (priced)</th><th>Output chars/token p10/avg/p99</th>' +
+        '</tr></thead><tbody>' +
+        rows.map(row => (
+          '<tr>' +
+          '<td>' + esc(row.name) + '</td>' +
+          '<td>' + esc(formatTokenCount(row.requests || 0)) + '</td>' +
+          '<td>' + esc(formatPct(pricedShare(row))) + '</td>' +
+          '<td>' + esc(formatNullableUsd(pricedCost(row))) + '</td>' +
+          '<td>' + esc(formatNullableUsd(avgPricedCost(row))) + '</td>' +
+          '<td>' + esc(formatNullableUsd(totalCostPerMillionOutput(row))) + '</td>' +
+          '<td>' + esc(formatNullableUsd(outputCostPerMillionOutput(row))) + '</td>' +
+          '<td>' + esc(formatRatio(pricedTokenCache(row), pricedTotalTokens(row))) + '</td>' +
+          '<td>' + esc(formatRatio(row.pricedReasoningOutput || 0, pricedOutputTokens(row))) + '</td>' +
+          '<td>' + esc(formatCharTokenRange(row)) + '</td>' +
+          '</tr>'
+        )).join('') +
+        '</tbody>';
+    }
+
+    function selectedProjectFromSummary(summary) {
+      const projects = summary?.projectDaily || [];
+      const select = document.getElementById('project-select');
+      const index = clamp(Number(select?.value || 0), 0, Math.max(0, projects.length - 1));
+      return projects[index] || null;
+    }
+
+    function renderProjectSelector(summary) {
+      const select = document.getElementById('project-select');
+      const projects = summary.projectDaily || [];
+      const previousValue = select.value;
+      if (!projects.length) {
+        select.innerHTML = '<option value="0">No projects</option>';
+        select.disabled = true;
+        return;
+      }
+      select.disabled = false;
+      select.innerHTML = projects.map((project, index) => {
+        const label = projectLabel(project.name) + ' · ' + formatUsdCompact(project.costUsd || 0);
+        return '<option value="' + index + '" title="' + esc(project.name) + '">' + esc(label) + '</option>';
+      }).join('');
+      const previousIndex = Number(previousValue);
+      if (Number.isInteger(previousIndex) && projects[previousIndex]) select.value = String(previousIndex);
+      else select.value = '0';
+    }
+
+    function render(summary) {
+      cachedSummary = summary;
+      document.getElementById('updated').textContent = 'Updated ' + new Date(summary.generatedAt).toLocaleString();
+      document.getElementById('cards').innerHTML = [
+        card('Cost', formatUsdCompact(summary.total.costUsd || 0)),
+        card('Requests', formatTokenCount(summary.total.requests || 0)),
+        card('Input Tokens', segmentCardText(summary.total, 'input'), 'token-card'),
+        card('Cache Tokens', segmentCardText(summary.total, 'cache'), 'token-card'),
+        card('Output Tokens', segmentCardText(summary.total, 'output'), 'token-card'),
+      ].join('');
+      renderDailyTokenChart(summary.daily);
+      renderCostMix(summary);
+      renderProjectSelector(summary);
+      renderProjectDailyChart(selectedProjectFromSummary(summary));
+      renderEfficiency(summary);
+    }
+
+    async function load() {
+      const summary = await fetch('/api/summary').then(r => r.json());
+      render(summary);
+    }
+
+    document.getElementById('cost-mix-controls').addEventListener('click', event => {
+      const mode = event.target?.dataset?.mixMode;
+      if (!mode) return;
+      costMixMode = mode;
+      if (cachedSummary) renderCostMix(cachedSummary);
+    });
+    document.getElementById('project-select').addEventListener('change', () => {
+      projectChart.selectedProjectName = null;
+      projectChart.hoverIndex = 0;
+      projectChart.zoom.start = 0;
+      projectChart.zoom.end = 0;
+      if (cachedSummary) renderProjectDailyChart(selectedProjectFromSummary(cachedSummary));
+    });
+    bindSharedMixCanvas(dailyTokenChart);
+    bindSharedMixCanvas(costChart);
+    bindSharedMixCanvas(projectChart);
+    new ResizeObserver(() => { if (cachedSummary) renderDailyTokenChart(cachedSummary.daily); }).observe(document.getElementById('daily-token-canvas'));
+    new ResizeObserver(() => { if (cachedSummary) renderCostMix(cachedSummary); }).observe(document.getElementById('cost-mix-canvas'));
+    new ResizeObserver(() => { if (cachedSummary) renderProjectDailyChart(selectedProjectFromSummary(cachedSummary)); }).observe(document.getElementById('project-cost-canvas'));
+    load().catch(error => { document.body.innerHTML = '<main><section><h2>Failed to load dashboard</h2><pre>' + esc(error.stack || error.message) + '</pre></section></main>'; });
+  </script>
+</body>
+</html>
