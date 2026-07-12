@@ -454,34 +454,72 @@
       ctx.restore();
     }
 
-    function drawSharedMixNode(ctx, node, active, config) {
-      const mix = config.mix(node.row);
-      const radius = active ? 7 : 5.5;
-      let start = -Math.PI / 2;
+    function drawSharedPinnedMarker(ctx, node) {
       ctx.save();
-      ctx.lineWidth = active ? 3 : 2;
-      for (const segment of sharedMixSegments) {
-        const value = mix[segment.pctKey] || 0;
-        if (value <= 0) continue;
-        const end = start + value * Math.PI * 2;
-        ctx.beginPath();
-        ctx.strokeStyle = segment.color();
-        ctx.arc(node.x, node.y, radius, start, end);
-        ctx.stroke();
-        start = end;
-      }
-      ctx.beginPath();
+      ctx.strokeStyle = colors.muted;
       ctx.fillStyle = colors.panel;
-      ctx.arc(node.x, node.y, Math.max(2, radius - 3), 0, Math.PI * 2);
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(node.x, node.y - 8);
+      ctx.lineTo(node.x, node.y - 15);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(node.x, node.y - 21);
+      ctx.lineTo(node.x + 4, node.y - 17);
+      ctx.lineTo(node.x, node.y - 13);
+      ctx.lineTo(node.x - 4, node.y - 17);
+      ctx.closePath();
       ctx.fill();
-      if (active) {
-        ctx.beginPath();
-        ctx.strokeStyle = colors.fg;
-        ctx.lineWidth = 1.5;
-        ctx.arc(node.x, node.y, radius + 3, 0, Math.PI * 2);
-        ctx.stroke();
-      }
+      ctx.stroke();
       ctx.restore();
+    }
+
+    function drawSharedHoverGuide(ctx, node, plot, label) {
+      const text = label.length > 20 ? label.slice(0, 19) + '…' : label;
+      ctx.save();
+      ctx.strokeStyle = colors.accent;
+      ctx.globalAlpha = .38;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(node.x, plot.top);
+      ctx.lineTo(node.x, plot.top + plot.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      ctx.font = '600 11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      const chipWidth = Math.min(plot.width, ctx.measureText(text).width + 16);
+      const chipX = clamp(node.x - chipWidth / 2, plot.left, plot.left + plot.width - chipWidth);
+      const chipY = plot.top + plot.height + 36;
+      ctx.fillStyle = colors.fg;
+      ctx.beginPath();
+      ctx.roundRect(chipX, chipY, chipWidth, 22, 4);
+      ctx.fill();
+      ctx.fillStyle = colors.panel;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, chipX + chipWidth / 2, chipY + 11);
+      ctx.restore();
+    }
+
+    function drawSharedPoint(ctx, node, { hovered = false, pinned = false } = {}) {
+      ctx.save();
+      if (hovered) {
+        ctx.globalAlpha = .16;
+        ctx.fillStyle = colors.accent;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, 11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = hovered ? colors.accent : (pinned ? colors.fg : colors.axis);
+      ctx.strokeStyle = colors.panel;
+      ctx.lineWidth = hovered ? 3 : 1.5;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, hovered ? 6 : (pinned ? 4.5 : 3.5), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      if (pinned && !hovered) drawSharedPinnedMarker(ctx, node);
     }
 
     function renderSharedMixLegend(chart, row, config) {
@@ -526,7 +564,7 @@
       if (dataChanged || chart.zoom.end <= chart.zoom.start || chart.zoom.end >= chart.rows.length) {
         chart.zoom.start = 0;
         chart.zoom.end = chart.rows.length - 1;
-        chart.hoverIndex = config.pinOnClick ? null : 0;
+        chart.hoverIndex = null;
         if (config.pinOnClick) chart.pinnedIndex = null;
       }
 
@@ -590,11 +628,14 @@
       ctx.globalAlpha = 1;
 
       chart.nodes = points;
-      const selectedIndex = chart.hoverIndex ?? (config.pinOnClick ? chart.pinnedIndex : range.start);
-      const activeIndex = selectedIndex != null && selectedIndex >= range.start && selectedIndex <= range.end
-        ? selectedIndex
-        : null;
-      for (const point of points) drawSharedMixNode(ctx, point, point.globalIndex === activeIndex, config);
+      const hoverPoint = points.find(point => point.globalIndex === chart.hoverIndex) || null;
+      if (hoverPoint) drawSharedHoverGuide(ctx, hoverPoint, plot, config.xLabel(hoverPoint.row));
+      for (const point of points) {
+        drawSharedPoint(ctx, point, {
+          hovered: point.globalIndex === chart.hoverIndex,
+          pinned: config.pinOnClick && point.globalIndex === chart.pinnedIndex,
+        });
+      }
 
       ctx.fillStyle = colors.muted;
       ctx.textAlign = 'center';
@@ -677,7 +718,7 @@
         if (nearest) {
           chart.hoverIndex = nearest.globalIndex;
           rerenderSharedMixChart(chart);
-        } else if (chart.config?.pinOnClick && chart.hoverIndex != null) {
+        } else if (chart.hoverIndex != null) {
           chart.hoverIndex = null;
           rerenderSharedMixChart(chart);
         }
@@ -687,7 +728,7 @@
         }
       });
       canvas.addEventListener('mouseleave', () => {
-        if (chart.config?.pinOnClick) chart.hoverIndex = null;
+        chart.hoverIndex = null;
         chart.dragStartX = null;
         chart.dragCurrentX = null;
         rerenderSharedMixChart(chart);

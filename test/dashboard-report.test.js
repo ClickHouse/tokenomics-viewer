@@ -56,7 +56,10 @@ test("dashboard html renders daily and cost mix with the shared canvas chart", (
   assert.match(html, /renderEfficiency/);
   assert.match(html, /renderSharedMixChart/);
   assert.match(html, /bindSharedMixCanvas/);
-  assert.match(html, /drawSharedMixNode/);
+  assert.match(html, /drawSharedPoint/);
+  assert.match(html, /drawSharedHoverGuide/);
+  assert.match(html, /drawSharedPinnedMarker/);
+  assert.doesNotMatch(html, /value \* Math\.PI \* 2/);
   assert.match(html, /Math\.max\(1, Math\.floor\(rect\.width/);
   assert.doesNotMatch(html, /Math\.max\(720, Math\.floor\(rect\.width/);
   assert.match(html, /tokenMix/);
