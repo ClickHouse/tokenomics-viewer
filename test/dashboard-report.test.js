@@ -57,6 +57,8 @@ test("dashboard html renders daily and cost mix with the shared canvas chart", (
   assert.match(html, /renderSharedMixChart/);
   assert.match(html, /bindSharedMixCanvas/);
   assert.match(html, /drawSharedMixNode/);
+  assert.match(html, /Math\.max\(1, Math\.floor\(rect\.width/);
+  assert.doesNotMatch(html, /Math\.max\(720, Math\.floor\(rect\.width/);
   assert.match(html, /tokenMix/);
   assert.match(html, /tokenScale/);
   assert.match(html, /Math\.log10/);
@@ -77,6 +79,11 @@ test("dashboard html replaces sessions with a zoomable project canvas", () => {
   assert.match(html, /zoomSharedChartAt/);
   assert.match(html, /drawSharedSelection/);
   assert.match(html, /bindSharedMixCanvas\(projectChart\)/);
+  assert.match(html, /pinnedIndex: null/);
+  assert.match(html, /summaryRow: selectedProject/);
+  assert.match(html, /pinOnClick: true/);
+  assert.match(html, /row\.name === 'Total'/);
+  assert.match(html, /chart\.pinnedIndex =/);
   assert.match(html, /segmentShareText/);
   assert.match(html, /tokens \/ /);
   assert.match(html, /Cost Mix/);
@@ -100,4 +107,3 @@ test("dashboard summary truncates top rows and preserves null metric serializati
   assert.equal(serialized.topModels[0].outputCharsPerTokenP99, null);
   assert.deepEqual(serialized.topModels[0].costsUsd, statsFixture().costsUsd);
 });
-

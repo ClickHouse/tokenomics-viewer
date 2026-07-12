@@ -305,7 +305,7 @@
 
     function sizeCanvas(canvas) {
       const rect = canvas.getBoundingClientRect();
-      const width = Math.max(720, Math.floor(rect.width || 720));
+      const width = Math.max(1, Math.floor(rect.width || 1));
       const height = Math.max(320, Math.floor(rect.height || 390));
       const dpr = window.devicePixelRatio || 1;
       if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
@@ -341,7 +341,8 @@
       selectedProject: null,
       selectedProjectName: null,
       nodes: [],
-      hoverIndex: 0,
+      hoverIndex: null,
+      pinnedIndex: null,
       dragStartX: null,
       dragCurrentX: null,
       plot: null,
@@ -525,7 +526,8 @@
       if (dataChanged || chart.zoom.end <= chart.zoom.start || chart.zoom.end >= chart.rows.length) {
         chart.zoom.start = 0;
         chart.zoom.end = chart.rows.length - 1;
-        chart.hoverIndex = 0;
+        chart.hoverIndex = config.pinOnClick ? null : 0;
+        if (config.pinOnClick) chart.pinnedIndex = null;
       }
 
       const margin = { top: 24, right: 24, bottom: 78, left: 78 };
@@ -588,8 +590,10 @@
       ctx.globalAlpha = 1;
 
       chart.nodes = points;
-      const activeIndex = clamp(chart.hoverIndex == null ? range.start : chart.hoverIndex, range.start, range.end);
-      chart.hoverIndex = activeIndex;
+      const selectedIndex = chart.hoverIndex ?? (config.pinOnClick ? chart.pinnedIndex : range.start);
+      const activeIndex = selectedIndex != null && selectedIndex >= range.start && selectedIndex <= range.end
+        ? selectedIndex
+        : null;
       for (const point of points) drawSharedMixNode(ctx, point, point.globalIndex === activeIndex, config);
 
       ctx.fillStyle = colors.muted;
@@ -601,7 +605,12 @@
       ctx.restore();
 
       drawSharedSelection(ctx, chart);
-      renderSharedMixLegend(chart, chart.rows[clamp(activeIndex, range.start, range.end)] || visible[0], config);
+      const legendRow = chart.hoverIndex != null
+        ? chart.rows[chart.hoverIndex]
+        : (config.pinOnClick && chart.pinnedIndex != null
+          ? chart.rows[chart.pinnedIndex]
+          : (config.summaryRow || chart.rows[range.start] || visible[0]));
+      renderSharedMixLegend(chart, legendRow, config);
       ctx.restore();
     }
 
@@ -617,9 +626,15 @@
         axisText: value => formatUsdCompact(value),
         scale: moneyScale,
         mix: costMix,
-        title: row => selectedProject ? selectedProject.name + ' · ' + row.name : row.name,
-        displayTitle: row => selectedProject ? projectLabel(selectedProject.name) + ' · ' + row.name : row.name,
+        title: row => selectedProject
+          ? selectedProject.name + ' · ' + (row.name === 'Total' ? 'Total' : row.name)
+          : row.name,
+        displayTitle: row => selectedProject
+          ? projectLabel(selectedProject.name) + ' · ' + (row.name === 'Total' ? 'Total' : row.name)
+          : row.name,
         xLabel: row => row.name,
+        summaryRow: selectedProject ? { ...selectedProject, name: 'Total' } : null,
+        pinOnClick: true,
       });
     }
 
@@ -642,10 +657,7 @@
     function bindSharedMixCanvas(chart) {
       const canvas = document.getElementById(chart.canvasId);
       if (!canvas) return;
-      canvas.addEventListener('mousemove', event => {
-        const rect = canvas.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
+      const nearestNode = (x, y, maxDistance = 18) => {
         let nearest = null;
         let nearestDistance = Infinity;
         for (const node of chart.nodes) {
@@ -655,8 +667,18 @@
             nearestDistance = distance;
           }
         }
-        if (nearest && nearestDistance <= 18) {
+        return nearestDistance <= maxDistance ? nearest : null;
+      };
+      canvas.addEventListener('mousemove', event => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const nearest = nearestNode(x, y);
+        if (nearest) {
           chart.hoverIndex = nearest.globalIndex;
+          rerenderSharedMixChart(chart);
+        } else if (chart.config?.pinOnClick && chart.hoverIndex != null) {
+          chart.hoverIndex = null;
           rerenderSharedMixChart(chart);
         }
         if (chart.dragStartX != null) {
@@ -665,6 +687,7 @@
         }
       });
       canvas.addEventListener('mouseleave', () => {
+        if (chart.config?.pinOnClick) chart.hoverIndex = null;
         chart.dragStartX = null;
         chart.dragCurrentX = null;
         rerenderSharedMixChart(chart);
@@ -684,6 +707,12 @@
         chart.dragStartX = null;
         chart.dragCurrentX = null;
         if (Math.abs(endX - startX) < 14) {
+          if (chart.config?.pinOnClick) {
+            const endY = event.clientY - rect.top;
+            const node = nearestNode(endX, endY);
+            chart.pinnedIndex = node && chart.pinnedIndex !== node.globalIndex ? node.globalIndex : null;
+            chart.hoverIndex = node?.globalIndex ?? null;
+          }
           rerenderSharedMixChart(chart);
           return;
         }
@@ -818,7 +847,8 @@
     });
     document.getElementById('project-select').addEventListener('change', () => {
       projectChart.selectedProjectName = null;
-      projectChart.hoverIndex = 0;
+      projectChart.hoverIndex = null;
+      projectChart.pinnedIndex = null;
       projectChart.zoom.start = 0;
       projectChart.zoom.end = 0;
       if (cachedSummary) renderProjectDailyChart(selectedProjectFromSummary(cachedSummary));
