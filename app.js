@@ -42,6 +42,7 @@ const storage = createStorage({
 const web = createWebServer({
   buildReportFromSelectedDatabase: storage.buildReportFromSelectedDatabase,
   resolveDbPath: storage.resolveDbPath,
+  syncDatabase: storage.syncDatabase,
 });
 
 // Keep the historical app.parseArgs --help side effect for consumers of app.js.

@@ -180,3 +180,151 @@ test("report cache clears failed builds so a later request can retry", async () 
   assert.strictEqual(await cache.get(), report);
   assert.equal(calls, 2);
 });
+
+test("report cache keeps an explicitly replaced report when an older build finishes", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const staleReport = { total: { requests: 1 } };
+  const freshReport = { total: { requests: 2 } };
+  const cache = createReportCache(async () => {
+    await gate;
+    return staleReport;
+  });
+
+  const pending = cache.get();
+  cache.set(freshReport);
+  release();
+
+  assert.strictEqual(await pending, freshReport);
+  assert.strictEqual(await cache.get(), freshReport);
+});
+
+test("sync endpoint requires a same-origin custom action header", async () => {
+  let syncCalls = 0;
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => newReport(),
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-protected-sync.sqlite"),
+    syncDatabase: async () => {
+      syncCalls += 1;
+      return newReport();
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    preloadedReport: newReport(),
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const missingHeader = await fetch(`${base}/api/sync`, { method: "POST" });
+    assert.equal(missingHeader.status, 403);
+    assert.deepEqual(await missingHeader.json(), { error: "sync request rejected" });
+
+    const crossSite = await fetch(`${base}/api/sync`, {
+      method: "POST",
+      headers: {
+        "sec-fetch-site": "cross-site",
+        "x-tokenomics-action": "sync",
+      },
+    });
+    assert.equal(crossSite.status, 403);
+    assert.deepEqual(await crossSite.json(), { error: "sync request rejected" });
+    assert.equal(syncCalls, 0);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("sync endpoint coalesces concurrent runs and atomically publishes the new report", async () => {
+  let syncCalls = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const oldReport = { ...newReport(), marker: "old" };
+  const newReportValue = { ...newReport(), marker: "new" };
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => oldReport,
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-coalesced-sync.sqlite"),
+    syncDatabase: async () => {
+      syncCalls += 1;
+      await gate;
+      return newReportValue;
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    preloadedReport: oldReport,
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const requestOptions = {
+      method: "POST",
+      headers: { "x-tokenomics-action": "sync" },
+    };
+    const [first, second] = await Promise.all([
+      fetch(`${base}/api/sync`, requestOptions).then((response) => response.json()),
+      fetch(`${base}/api/sync`, requestOptions).then((response) => response.json()),
+    ]);
+
+    assert.equal(syncCalls, 1);
+    assert.deepEqual([first.started, second.started].sort(), [false, true]);
+    assert.equal(first.sync.runId, second.sync.runId);
+    assert.equal(first.sync.state, "running");
+    assert.equal(second.sync.state, "running");
+    assert.equal((await fetch(`${base}/api/sync`).then((response) => response.json())).sync.state, "running");
+    assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "old");
+
+    release();
+    await server.syncController.waitForIdle();
+
+    const completed = await fetch(`${base}/api/sync`).then((response) => response.json());
+    assert.equal(completed.sync.state, "succeeded");
+    assert.equal(completed.sync.error, null);
+    assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "new");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("failed sync preserves the cached report and permits a retry", async () => {
+  let syncCalls = 0;
+  const oldReport = { ...newReport(), marker: "old" };
+  const recoveredReport = { ...newReport(), marker: "recovered" };
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => oldReport,
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-retry-sync.sqlite"),
+    syncDatabase: async () => {
+      syncCalls += 1;
+      if (syncCalls === 1) throw new Error("temporary sync failure");
+      return recoveredReport;
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    preloadedReport: oldReport,
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const requestOptions = {
+      method: "POST",
+      headers: { "x-tokenomics-action": "sync" },
+    };
+
+    await fetch(`${base}/api/sync`, requestOptions);
+    await server.syncController.waitForIdle();
+    const failed = await fetch(`${base}/api/sync`).then((response) => response.json());
+    assert.equal(failed.sync.state, "failed");
+    assert.equal(failed.sync.error, "temporary sync failure");
+    assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "old");
+
+    const retry = await fetch(`${base}/api/sync`, requestOptions).then((response) => response.json());
+    assert.equal(retry.started, true);
+    assert.equal(retry.sync.runId, 2);
+    await server.syncController.waitForIdle();
+    assert.equal((await fetch(`${base}/api/sync`).then((response) => response.json())).sync.state, "succeeded");
+    assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "recovered");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

@@ -16,6 +16,10 @@
     .brand-group, .header-actions, .sync-state { display:flex; align-items:center; gap:10px; }
     .sync-state { color:var(--muted); font-size:12px; }
     .status-dot { width:8px; height:8px; border-radius:50%; background:var(--cache); box-shadow:0 0 0 3px color-mix(in srgb, var(--cache) 15%, transparent); }
+    .status-dot.running { background:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); animation:sync-pulse 1.4s ease-in-out infinite; }
+    .status-dot.failed { background:var(--out); box-shadow:0 0 0 3px color-mix(in srgb, var(--out) 15%, transparent); }
+    @keyframes sync-pulse { 50% { opacity:.35; } }
+    @media (prefers-reduced-motion: reduce) { .status-dot.running { animation:none; } }
     h1 { margin:0; font-size:18px; letter-spacing:0; }
     .action-button { min-height:32px; border:1px solid var(--line); border-radius:6px; padding:5px 10px; color:var(--fg); background:var(--panel); cursor:pointer; }
     .action-button:hover { border-color:var(--axis); background:var(--soft); }
@@ -79,9 +83,9 @@
     <div class="brand-row">
       <div class="brand-group">
         <h1>Tokenomics</h1>
-        <div class="sync-state"><span class="status-dot"></span><span id="updated">Loading...</span></div>
+        <div class="sync-state" role="status" aria-live="polite"><span class="status-dot" id="sync-status-dot"></span><span id="updated">Loading...</span></div>
       </div>
-      <div class="header-actions"><button class="action-button" id="refresh-dashboard" type="button">Refresh</button></div>
+      <div class="header-actions"><button class="action-button" id="sync-dashboard" type="button" title="Scan logs and update the database">Sync</button></div>
     </div>
     <nav class="section-nav" id="section-nav" aria-label="Dashboard sections">
       <button class="nav-button active" type="button" data-section-target="overview-section">Overview</button>
@@ -962,18 +966,94 @@
       renderEfficiency(summary);
     }
 
-    async function load() {
-      const button = document.getElementById('refresh-dashboard');
-      button.disabled = true;
-      button.textContent = 'Refreshing...';
-      try {
-        const response = await fetch('/api/summary', { cache: 'no-store' });
-        if (!response.ok) throw new Error('Summary request failed: HTTP ' + response.status);
-        render(await response.json());
-      } finally {
-        button.disabled = false;
-        button.textContent = 'Refresh';
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    let syncPollGeneration = 0;
+
+    async function loadSummary() {
+      const response = await fetch('/api/summary', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Summary request failed: HTTP ' + response.status);
+      render(await response.json());
+    }
+
+    function renderSyncStatus(sync) {
+      const button = document.getElementById('sync-dashboard');
+      const dot = document.getElementById('sync-status-dot');
+      const updated = document.getElementById('updated');
+      const state = sync?.state || 'idle';
+      const running = state === 'running';
+      button.disabled = running;
+      button.textContent = running ? 'Syncing...' : 'Sync';
+      dot.classList.toggle('running', running);
+      dot.classList.toggle('failed', state === 'failed');
+      if (running) {
+        updated.textContent = 'Scanning logs and updating database';
+        updated.title = sync.startedAt ? 'Started ' + new Date(sync.startedAt).toLocaleString() : '';
+      } else if (state === 'failed') {
+        updated.textContent = 'Sync failed';
+        updated.title = sync.error || 'Unknown sync error';
+      } else if (state === 'succeeded') {
+        updated.textContent = 'Updated just now';
+        updated.title = sync.finishedAt ? new Date(sync.finishedAt).toLocaleString() : '';
       }
+    }
+
+    async function fetchSyncStatus() {
+      const response = await fetch('/api/sync', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Sync status request failed: HTTP ' + response.status);
+      return (await response.json()).sync;
+    }
+
+    async function pollSyncStatus() {
+      const generation = ++syncPollGeneration;
+      let failures = 0;
+      while (generation === syncPollGeneration) {
+        await delay(700);
+        try {
+          const sync = await fetchSyncStatus();
+          failures = 0;
+          renderSyncStatus(sync);
+          if (sync.state !== 'running') {
+            if (sync.state === 'succeeded') await loadSummary();
+            return;
+          }
+        } catch (error) {
+          failures += 1;
+          if (failures >= 5) {
+            const button = document.getElementById('sync-dashboard');
+            button.disabled = false;
+            button.textContent = 'Sync';
+            document.getElementById('updated').textContent = 'Sync status unavailable';
+            document.getElementById('updated').title = error.message;
+            console.error(error);
+            return;
+          }
+        }
+      }
+    }
+
+    async function startSync() {
+      syncPollGeneration += 1;
+      renderSyncStatus({ state: 'running', startedAt: new Date().toISOString() });
+      try {
+        const response = await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'x-tokenomics-action': 'sync' },
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Sync request failed: HTTP ' + response.status);
+        renderSyncStatus(body.sync);
+        if (body.sync.state === 'running') await pollSyncStatus();
+        else if (body.sync.state === 'succeeded') await loadSummary();
+      } catch (error) {
+        renderSyncStatus({ state: 'failed', error: error.message });
+        console.error(error);
+      }
+    }
+
+    async function initializeDashboard() {
+      const [, sync] = await Promise.all([loadSummary(), fetchSyncStatus()]);
+      renderSyncStatus(sync);
+      if (sync.state === 'running') await pollSyncStatus();
     }
 
     document.getElementById('cost-mix-controls').addEventListener('click', event => {
@@ -994,8 +1074,8 @@
         renderDailyTokenChart(dailyRowsInRange(cachedSummary.daily));
       }
     });
-    document.getElementById('refresh-dashboard').addEventListener('click', () => {
-      load().catch(error => { document.getElementById('updated').textContent = 'Refresh failed'; console.error(error); });
+    document.getElementById('sync-dashboard').addEventListener('click', () => {
+      startSync();
     });
     let activeSectionTarget = 'overview-section';
     function syncSectionNav() {
@@ -1030,7 +1110,7 @@
     new ResizeObserver(() => { if (cachedSummary) renderDailyTokenChart(dailyRowsInRange(cachedSummary.daily)); }).observe(document.getElementById('daily-token-canvas'));
     new ResizeObserver(() => { if (cachedSummary) renderCostMix(cachedSummary); }).observe(document.getElementById('cost-mix-canvas'));
     new ResizeObserver(() => { if (cachedSummary) renderProjectDailyChart(selectedProjectFromSummary(cachedSummary)); }).observe(document.getElementById('project-cost-canvas'));
-    load().catch(error => { document.body.innerHTML = '<main><section><h2>Failed to load dashboard</h2><pre>' + esc(error.stack || error.message) + '</pre></section></main>'; });
+    initializeDashboard().catch(error => { document.body.innerHTML = '<main><section><h2>Failed to load dashboard</h2><pre>' + esc(error.stack || error.message) + '</pre></section></main>'; });
   </script>
 </body>
 </html>

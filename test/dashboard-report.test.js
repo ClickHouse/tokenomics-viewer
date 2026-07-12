@@ -102,7 +102,10 @@ test("dashboard html exposes the operational overview layout", () => {
   const html = dashboardHtml();
 
   assert.match(html, /id="app-header"/);
-  assert.match(html, /id="refresh-dashboard"/);
+  assert.match(html, /id="sync-dashboard"/);
+  assert.match(html, /fetch\('\/api\/sync'/);
+  assert.match(html, /x-tokenomics-action/);
+  assert.match(html, /pollSyncStatus/);
   assert.match(html, /id="section-nav"/);
   assert.match(html, /data-section-target="overview-section"/);
   assert.match(html, /id="overview-section"/);
