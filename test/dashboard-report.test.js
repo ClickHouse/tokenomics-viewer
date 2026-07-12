@@ -106,6 +106,10 @@ test("dashboard html exposes the operational overview layout", () => {
   assert.match(html, /fetch\('\/api\/sync'/);
   assert.match(html, /x-tokenomics-action/);
   assert.match(html, /pollSyncStatus/);
+  assert.match(html, /new EventSource\('\/api\/sync\/events'\)/);
+  assert.match(html, /changedSources/);
+  assert.match(html, /sync\.available/);
+  assert.match(html, /await loadSummary\(\);\s*renderSyncStatus\(sync\);/);
   assert.match(html, /id="section-nav"/);
   assert.match(html, /data-section-target="overview-section"/);
   assert.match(html, /id="overview-section"/);

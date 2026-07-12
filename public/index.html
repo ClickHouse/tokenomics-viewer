@@ -14,17 +14,20 @@
     .app-header { position:sticky; top:0; z-index:5; background:color-mix(in srgb, var(--panel) 96%, transparent); border-bottom:1px solid var(--line); backdrop-filter:blur(12px); }
     .brand-row { min-height:50px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:8px 20px; }
     .brand-group, .header-actions, .sync-state { display:flex; align-items:center; gap:10px; }
-    .sync-state { color:var(--muted); font-size:12px; }
+    .brand-group { min-width:0; }
+    .sync-state { min-width:0; max-width:min(70vw, 780px); color:var(--muted); font-size:12px; }
+    #updated { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .status-dot { width:8px; height:8px; border-radius:50%; background:var(--cache); box-shadow:0 0 0 3px color-mix(in srgb, var(--cache) 15%, transparent); }
     .status-dot.running { background:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); animation:sync-pulse 1.4s ease-in-out infinite; }
     .status-dot.failed { background:var(--out); box-shadow:0 0 0 3px color-mix(in srgb, var(--out) 15%, transparent); }
+    .status-dot.unavailable { background:var(--axis); box-shadow:none; }
     @keyframes sync-pulse { 50% { opacity:.35; } }
     @media (prefers-reduced-motion: reduce) { .status-dot.running { animation:none; } }
     h1 { margin:0; font-size:18px; letter-spacing:0; }
     .action-button { min-height:32px; border:1px solid var(--line); border-radius:6px; padding:5px 10px; color:var(--fg); background:var(--panel); cursor:pointer; }
     .action-button:hover { border-color:var(--axis); background:var(--soft); }
     .action-button:focus-visible, .seg-button:focus-visible, .nav-button:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-    .action-button:disabled { cursor:wait; color:var(--muted); }
+    .action-button:disabled { cursor:not-allowed; color:var(--muted); }
     .section-nav { display:flex; gap:24px; min-height:38px; padding:0 20px; overflow:auto; }
     .nav-button { position:relative; border:0; background:transparent; color:var(--muted); padding:8px 0 9px; cursor:pointer; white-space:nowrap; }
     .nav-button.active { color:var(--accent); font-weight:650; }
@@ -85,7 +88,7 @@
         <h1>Tokenomics</h1>
         <div class="sync-state" role="status" aria-live="polite"><span class="status-dot" id="sync-status-dot"></span><span id="updated">Loading...</span></div>
       </div>
-      <div class="header-actions"><button class="action-button" id="sync-dashboard" type="button" title="Scan logs and update the database">Sync</button></div>
+      <div class="header-actions"><button class="action-button" id="sync-dashboard" type="button" title="Scan logs and update the database" disabled>Sync</button></div>
     </div>
     <nav class="section-nav" id="section-nav" aria-label="Dashboard sections">
       <button class="nav-button active" type="button" data-section-target="overview-section">Overview</button>
@@ -968,6 +971,8 @@
 
     const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
     let syncPollGeneration = 0;
+    let syncEventSource = null;
+    let syncAvailable = false;
 
     async function loadSummary() {
       const response = await fetch('/api/summary', { cache: 'no-store' });
@@ -980,21 +985,58 @@
       const dot = document.getElementById('sync-status-dot');
       const updated = document.getElementById('updated');
       const state = sync?.state || 'idle';
+      if (typeof sync?.available === 'boolean') syncAvailable = sync.available;
       const running = state === 'running';
-      button.disabled = running;
+      button.disabled = running || !syncAvailable;
       button.textContent = running ? 'Syncing...' : 'Sync';
       dot.classList.toggle('running', running);
       dot.classList.toggle('failed', state === 'failed');
-      if (running) {
-        updated.textContent = 'Scanning logs and updating database';
+      dot.classList.toggle('unavailable', !syncAvailable);
+      if (!syncAvailable) {
+        updated.textContent = 'Sync unavailable';
+        updated.title = sync?.unavailableReason || 'Sync is disabled for this webserver binding.';
+        button.title = updated.title;
+      } else if (running) {
+        const progress = sync.progress || {};
+        const completed = progress.completedSources || 0;
+        const candidates = progress.candidateSources;
+        const count = Number.isFinite(candidates) ? ' ' + completed + '/' + candidates : '';
+        const source = progress.currentSource ? ' · ' + shortSource(progress.currentSource) : '';
+        const bytes = progress.bytesProcessed ? ' · ' + formatBytes(progress.bytesProcessed) : '';
+        const phase = progress.phase === 'finalizing' ? 'Finalizing' : (progress.phase === 'processing' ? 'Processing' : 'Discovering');
+        updated.textContent = phase + count + bytes + source;
         updated.title = sync.startedAt ? 'Started ' + new Date(sync.startedAt).toLocaleString() : '';
       } else if (state === 'failed') {
         updated.textContent = 'Sync failed';
         updated.title = sync.error || 'Unknown sync error';
       } else if (state === 'succeeded') {
-        updated.textContent = 'Updated just now';
+        const result = sync.result || {};
+        updated.textContent = 'Synced ' + (result.changedSources || 0) + ' changed · ' +
+          (result.skippedSources || 0) + ' skipped · ' + formatDuration(result.durationMs || 0);
         updated.title = sync.finishedAt ? new Date(sync.finishedAt).toLocaleString() : '';
       }
+    }
+
+    function shortSource(value) {
+      const parts = String(value).split(/[\\/:]/);
+      return parts[parts.length - 1] || String(value);
+    }
+
+    function formatDuration(milliseconds) {
+      if (milliseconds < 1_000) return Math.round(milliseconds) + 'ms';
+      if (milliseconds < 60_000) return (milliseconds / 1_000).toFixed(1) + 's';
+      return (milliseconds / 60_000).toFixed(1) + 'm';
+    }
+
+    function formatBytes(value) {
+      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      let amount = Math.max(0, value || 0);
+      let unit = 0;
+      while (amount >= 1024 && unit < units.length - 1) {
+        amount /= 1024;
+        unit += 1;
+      }
+      return amount.toFixed(unit === 0 ? 0 : 1) + units[unit];
     }
 
     async function fetchSyncStatus() {
@@ -1013,7 +1055,10 @@
           failures = 0;
           renderSyncStatus(sync);
           if (sync.state !== 'running') {
-            if (sync.state === 'succeeded') await loadSummary();
+            if (sync.state === 'succeeded') {
+              await loadSummary();
+              renderSyncStatus(sync);
+            }
             return;
           }
         } catch (error) {
@@ -1031,9 +1076,49 @@
       }
     }
 
+    function closeSyncEventSource() {
+      if (!syncEventSource) return;
+      syncEventSource.close();
+      syncEventSource = null;
+    }
+
+    function watchSyncStatus() {
+      syncPollGeneration += 1;
+      closeSyncEventSource();
+      if (typeof EventSource !== 'function') {
+        pollSyncStatus();
+        return;
+      }
+      const generation = syncPollGeneration;
+      const events = new EventSource('/api/sync/events');
+      syncEventSource = events;
+      events.onmessage = async event => {
+        if (generation !== syncPollGeneration) return;
+        try {
+          const sync = JSON.parse(event.data).sync;
+          renderSyncStatus(sync);
+          if (sync.state !== 'running') {
+            closeSyncEventSource();
+            if (sync.state === 'succeeded') {
+              await loadSummary();
+              renderSyncStatus(sync);
+            }
+          }
+        } catch (error) {
+          console.error(error);
+        }
+      };
+      events.onerror = () => {
+        if (generation !== syncPollGeneration) return;
+        closeSyncEventSource();
+        pollSyncStatus();
+      };
+    }
+
     async function startSync() {
       syncPollGeneration += 1;
-      renderSyncStatus({ state: 'running', startedAt: new Date().toISOString() });
+      closeSyncEventSource();
+      renderSyncStatus({ state: 'running', available: syncAvailable, startedAt: new Date().toISOString() });
       try {
         const response = await fetch('/api/sync', {
           method: 'POST',
@@ -1042,10 +1127,13 @@
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Sync request failed: HTTP ' + response.status);
         renderSyncStatus(body.sync);
-        if (body.sync.state === 'running') await pollSyncStatus();
-        else if (body.sync.state === 'succeeded') await loadSummary();
+        if (body.sync.state === 'running') watchSyncStatus();
+        else if (body.sync.state === 'succeeded') {
+          await loadSummary();
+          renderSyncStatus(body.sync);
+        }
       } catch (error) {
-        renderSyncStatus({ state: 'failed', error: error.message });
+        renderSyncStatus({ state: 'failed', available: syncAvailable, error: error.message });
         console.error(error);
       }
     }
@@ -1053,7 +1141,7 @@
     async function initializeDashboard() {
       const [, sync] = await Promise.all([loadSummary(), fetchSyncStatus()]);
       renderSyncStatus(sync);
-      if (sync.state === 'running') await pollSyncStatus();
+      if (sync.state === 'running') watchSyncStatus();
     }
 
     document.getElementById('cost-mix-controls').addEventListener('click', event => {

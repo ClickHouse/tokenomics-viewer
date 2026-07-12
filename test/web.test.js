@@ -6,7 +6,12 @@ const os = require("node:os");
 const Path = require("node:path");
 const test = require("node:test");
 const { newReport, startWebServer, syncDatabase } = require("../app");
-const { createReportCache, createWebServer } = require("../lib/web-server");
+const {
+  createReportCache,
+  createSyncController,
+  createWebServer,
+  isLoopbackHost,
+} = require("../lib/web-server");
 const { defaultOptions } = require("./support/fixtures");
 
 test("web server serves stored SQLite summary and sessions", async () => {
@@ -325,6 +330,141 @@ test("failed sync preserves the cached report and permits a retry", async () => 
     assert.equal((await fetch(`${base}/api/sync`).then((response) => response.json())).sync.state, "succeeded");
     assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "recovered");
   } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("loopback host detection rejects wildcard and LAN bindings", () => {
+  for (const host of ["127.0.0.1", "127.42.0.9", "::1", "[::1]", "localhost"]) {
+    assert.equal(isLoopbackHost(host), true, host);
+  }
+  for (const host of ["0.0.0.0", "::", "192.168.1.20", "tokenomics.local", ""]) {
+    assert.equal(isLoopbackHost(host), false, host);
+  }
+});
+
+test("non-loopback webserver binding exposes status but rejects sync mutations", async () => {
+  let syncCalls = 0;
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => newReport(),
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-remote-sync.sqlite"),
+    syncDatabase: async () => {
+      syncCalls += 1;
+      return newReport();
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    preloadedReport: newReport(),
+    host: "0.0.0.0",
+    port: 0,
+  }));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const status = await fetch(`${base}/api/sync`).then((response) => response.json());
+    assert.equal(status.sync.available, false);
+    assert.match(status.sync.unavailableReason, /loopback host/);
+
+    const response = await fetch(`${base}/api/sync`, {
+      method: "POST",
+      headers: { "x-tokenomics-action": "sync" },
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "sync is disabled for non-loopback webserver bindings" });
+    assert.equal(syncCalls, 0);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("sync controller publishes structured progress and a bounded run result", async () => {
+  const report = { ...newReport(), sessions: [{}, {}, {}] };
+  const cache = createReportCache(async () => newReport(), newReport());
+  let clock = 1_000;
+  const snapshots = [];
+  const controller = createSyncController({
+    reportCache: cache,
+    options: { dbEngine: "sqlite" },
+    now: () => new Date(clock),
+    syncDatabase: async (options) => {
+      options.onSyncProgress({
+        phase: "processing",
+        totalSources: 9,
+        candidateSources: 3,
+        completedSources: 1,
+        currentSource: "/tmp/one.jsonl",
+      });
+      clock = 4_250;
+      options.onSyncProgress({
+        phase: "finalizing",
+        completedSources: 3,
+        changedSources: 3,
+      });
+      return report;
+    },
+  });
+  const unsubscribe = controller.subscribe((status) => snapshots.push(status));
+  const unsubscribeBroken = controller.subscribe(() => { throw new Error("observer failed"); });
+  assert.equal(controller.listenerCount(), 2);
+
+  assert.equal(controller.start().started, true);
+  await controller.waitForIdle();
+  unsubscribe();
+  unsubscribeBroken();
+
+  const status = controller.getStatus();
+  assert.equal(controller.listenerCount(), 0);
+  assert.equal(status.state, "succeeded");
+  assert.deepEqual(status.progress, {
+    phase: "finalizing",
+    totalSources: 9,
+    candidateSources: 3,
+    completedSources: 3,
+    currentSource: "/tmp/one.jsonl",
+    changedSources: 3,
+  });
+  assert.deepEqual(status.result, {
+    engine: "sqlite",
+    durationMs: 3_250,
+    totalSources: 9,
+    changedSources: 3,
+    skippedSources: 6,
+    sessions: 3,
+  });
+  assert.ok(snapshots.some((snapshot) => snapshot.progress?.completedSources === 1));
+  assert.equal(snapshots.at(-1).state, "succeeded");
+});
+
+test("sync event stream sends an initial snapshot and releases its listener", async () => {
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => newReport(),
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-sync-events.sqlite"),
+    syncDatabase: async () => newReport(),
+  });
+  const server = await web.startWebServer(defaultOptions({
+    preloadedReport: newReport(),
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  const abort = new AbortController();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const response = await fetch(`${base}/api/sync/events`, { signal: abort.signal });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
+    const reader = response.body.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    assert.match(first, /^data: /);
+    assert.match(first, /"state":"idle"/);
+    assert.match(first, /"available":true/);
+    assert.equal(server.syncController.listenerCount(), 1);
+    await reader.cancel();
+    abort.abort();
+    for (let i = 0; i < 20 && server.syncController.listenerCount() > 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(server.syncController.listenerCount(), 0);
+  } finally {
+    abort.abort();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });

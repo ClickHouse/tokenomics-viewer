@@ -224,6 +224,8 @@ not require a reset.
 - `/api/summary`
 - `/api/sessions`
 - `/api/report`
+- `/api/sync` sync status and protected start action
+- `/api/sync/events` live sync progress over server-sent events
 
 The dashboard shows canvas-based daily token-flow, cost-mix, and per-project
 daily cost charts with mouse-wheel zoom and drag selection. Hover labels use the
@@ -240,6 +242,12 @@ values.
 The server binds to `127.0.0.1` by default. Use `--host` only if you understand
 that reports can contain local file paths, project names, usage patterns, and
 estimated spending.
+
+The dashboard Sync button is enabled only when the webserver is bound to a
+loopback host. Bindings such as `0.0.0.0` and LAN addresses remain read-only:
+reports are served, but sync mutations are rejected. This is intentional;
+the custom action header prevents browser CSRF but is not remote-user
+authentication.
 
 ## Pricing
 

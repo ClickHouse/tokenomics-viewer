@@ -107,13 +107,28 @@ test("syncDatabase imports sources idempotently and replaces changed sessions", 
   ].join("\n"));
 
   writeSession(200_000);
-  const first = await syncDatabase(defaultOptions({ db, paths: [jsonl] }));
+  const progressEvents = [];
+  const first = await syncDatabase(defaultOptions({
+    db,
+    paths: [jsonl],
+    onSyncProgress: (event) => progressEvents.push(event),
+  }));
   const second = await syncDatabase(defaultOptions({ db, paths: [jsonl] }));
 
   assert.equal(first.total.requests, 1);
   assert.equal(second.total.requests, 1);
   assert.equal(second.total.output, 200_000);
   assert.equal(second.sessions.length, 1);
+  assert.equal(progressEvents[0].phase, "discovering");
+  assert.ok(progressEvents.some((event) => event.phase === "processing" && event.currentSource === jsonl));
+  assert.ok(progressEvents.some((event) => event.phase === "processing" && event.sourceCompleted));
+  assert.deepEqual(progressEvents.at(-1), {
+    phase: "finalizing",
+    totalSources: 1,
+    candidateSources: 1,
+    completedSources: 1,
+    changedSources: 1,
+  });
 
   writeSession(300_000);
   const updated = await syncDatabase(defaultOptions({ db, paths: [jsonl] }));

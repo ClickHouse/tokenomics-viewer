@@ -237,6 +237,7 @@ test("ClickHouse fork pre-scan excludes unchanged sources", async () => {
   const jsonl = createSessionFile({ rows: 1 });
   const mock = createClickHouseServer();
   const forkCandidates = [];
+  const progressEvents = [];
   const backend = createClickHouseBackend({
     createLimiter: () => ({ take: () => true }),
     discoverInputs: async () => [{ kind: "jsonl", path: jsonl }],
@@ -254,12 +255,28 @@ test("ClickHouse fork pre-scan excludes unchanged sources", async () => {
       clickhouseUrl: url,
       clickhouseDatabase: "tokenomics_unchanged_prescan_test",
       progress: false,
+      onSyncProgress: (event) => progressEvents.push(event),
     });
     await backend.syncClickHouseDatabase(options);
     await backend.syncClickHouseDatabase(options);
   });
 
   assert.deepEqual(forkCandidates, [[jsonl], []]);
+  assert.deepEqual(progressEvents.slice(0, 3).map((event) => event.phase), ["discovering", "processing", "finalizing"]);
+  assert.deepEqual(progressEvents[2], {
+    phase: "finalizing",
+    totalSources: 1,
+    candidateSources: 1,
+    completedSources: 1,
+    changedSources: 1,
+  });
+  assert.deepEqual(progressEvents.at(-1), {
+    phase: "finalizing",
+    totalSources: 1,
+    candidateSources: 0,
+    completedSources: 0,
+    changedSources: 0,
+  });
 });
 
 test("ClickHouse sync streams usage rows in bounded insert chunks", async () => {
