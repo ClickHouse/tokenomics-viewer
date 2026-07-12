@@ -40,6 +40,11 @@ test("parseArgs accepts ClickHouse database backend options", () => {
   assert.equal(options.clickhouseInsertBatchBytes, 8 * 1024 * 1024);
   assert.equal(options.clickhouseReset, true);
 });
+
+test("default options honor CODEX_HOME for Codex session discovery", () => {
+  const options = cli.defaultOptions({ CODEX_HOME: "/tmp/custom-codex-home" });
+  assert.equal(options.codexHome, Path.resolve("/tmp/custom-codex-home"));
+});
 test("main writes final JSON report with per-session metrics", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-output-test-"));
   const jsonl = Path.join(tmp, "session.jsonl");

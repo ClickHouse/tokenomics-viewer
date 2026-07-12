@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const Path = require("node:path");
+const zlib = require("node:zlib");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const { buildReport, createLineProcessor, newReport } = require("../app");
@@ -44,6 +45,55 @@ test("buildReport scans explicit JSONL path and zip archives", async () => {
   assert.equal(report.sources.zipEntries, 1);
   assert.equal(report.models["gpt-5.4-mini"].requests, 1);
   assert.equal(Number(report.total.costUsd.toFixed(6)), 5.25);
+});
+
+test("default Codex discovery reads archived JSONL and compressed rollout files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-codex-home-test-"));
+  const codexHome = Path.join(tmp, "custom-codex-home");
+  const sessions = Path.join(codexHome, "sessions", "2026", "07", "12");
+  const archived = Path.join(codexHome, "archived_sessions");
+  fs.mkdirSync(sessions, { recursive: true });
+  fs.mkdirSync(archived, { recursive: true });
+
+  const rollout = (timestamp, cwd) => [
+    JSON.stringify({ type: "turn_context", timestamp, payload: { cwd, model: "gpt-5.4-mini" } }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp,
+      payload: {
+        type: "token_count",
+        info: { last_token_usage: { input_tokens: 100, cached_input_tokens: 25, output_tokens: 10 } },
+      },
+    }),
+    "",
+  ].join("\n");
+
+  const activeRollout = rollout("2026-07-12T10:00:00.000Z", "/tmp/active");
+  fs.writeFileSync(
+    Path.join(sessions, "rollout-active.jsonl.zst"),
+    zlib.zstdCompressSync(activeRollout),
+  );
+  fs.writeFileSync(
+    Path.join(archived, "rollout-archived.jsonl"),
+    rollout("2026-07-11T10:00:00.000Z", "/tmp/archived"),
+  );
+
+  const report = await buildReport(defaultOptions({ source: "codex", home: tmp, codexHome }));
+  assert.equal(report.sessions.length, 2);
+  assert.equal(report.total.requests, 2);
+
+  const activeOnly = await buildReport(defaultOptions({
+    source: "codex",
+    home: tmp,
+    codexHome,
+    includeArchives: false,
+  }));
+  assert.equal(activeOnly.sessions.length, 1);
+  assert.match(activeOnly.sessions[0].path, /rollout-active\.jsonl\.zst$/);
+
+  fs.writeFileSync(Path.join(sessions, "rollout-active.jsonl"), activeRollout);
+  const transition = await buildReport(defaultOptions({ source: "codex", home: tmp, codexHome }));
+  assert.equal(transition.sessions.length, 2, "plain and compressed siblings must represent one rollout");
 });
 
 test("malformed JSON is counted in lenient mode and rejected in strict mode", async () => {

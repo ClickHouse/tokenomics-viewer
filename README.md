@@ -228,13 +228,16 @@ logs:
 When no paths are passed, Tokenomics Viewer scans:
 
 - `~/.claude/projects/**/*.jsonl`
-- `~/.codex/sessions/**/*.jsonl`
-- `~/.codex/archived_sessions/**/*.zip`
+- `${CODEX_HOME:-~/.codex}/sessions/**/*.{jsonl,jsonl.zst}`
+- `${CODEX_HOME:-~/.codex}/archived_sessions/**/*.{jsonl,jsonl.zst,zip}`
 
 Use `--source claude`, `--source codex`, `--archives`, and `--no-archives` to
 control default discovery.
 
-ZIP archives are read directly without extracting entries to disk.
+ZIP archives and Codex Zstd-compressed rollouts are read directly without
+extracting entries to disk. When both `.jsonl` and `.jsonl.zst` representations
+exist during a Codex compression transition, Tokenomics reads only the plain
+file.
 
 ## Reports
 

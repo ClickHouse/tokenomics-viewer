@@ -149,6 +149,37 @@ test("syncDatabase imports sources idempotently and replaces changed sessions", 
   assert.equal(fromDb.total.output, 300_000);
 });
 
+test("SQLite replaces a Codex source when archiving moves the same session", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-archive-move-"));
+  const active = Path.join(tmp, "active.jsonl");
+  const archived = Path.join(tmp, "archived.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const sessionId = "019f5840-0000-7000-8000-000000000001";
+  fs.writeFileSync(active, [
+    JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: "/tmp/archive-move" } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-07-12T10:00:00.000Z", payload: { cwd: "/tmp/archive-move", model: "gpt-5.4-mini" } }),
+    JSON.stringify({ type: "event_msg", timestamp: "2026-07-12T10:00:01.000Z", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 10, cached_input_tokens: 5, output_tokens: 2 } } } }),
+    "",
+  ].join("\n"));
+
+  await syncDatabase(defaultOptions({ db, paths: [active] }));
+  fs.renameSync(active, archived);
+  const report = await syncDatabase(defaultOptions({ db, paths: [archived] }));
+
+  assert.equal(report.total.requests, 1);
+  const stored = new DatabaseSync(db);
+  try {
+    assert.deepEqual(stored.prepare("SELECT source_path FROM sources ORDER BY source_path").all().map((row) => ({ ...row })), [
+      { source_path: archived },
+    ]);
+    assert.deepEqual({ ...stored.prepare("SELECT source_path FROM codex_sessions WHERE session_id = ?").get(sessionId) }, {
+      source_path: archived,
+    });
+  } finally {
+    stored.close();
+  }
+});
+
 test("syncDatabase reuses persisted Codex parent metadata for a child-only import", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-fork-db-test-"));
   const parent = Path.join(tmp, "parent.jsonl");

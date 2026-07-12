@@ -174,6 +174,18 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
         return;
       }
 
+      if (query.includes("FROM codex_session_versions") && query.includes("FROM codex_sessions")) {
+        const generationId = url.searchParams.get("param_generation");
+        const rowsBySession = new Map();
+        for (const row of visibleRows("codex_session_versions", generationId)) {
+          rowsBySession.set(row.session_id, row);
+        }
+        const rows = [...rowsBySession.values()];
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        response.end(rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
+        return;
+      }
+
       response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
       if (query.includes("FROM usage_events") && query.includes("UNION ALL")) {
         const generationId = url.searchParams.get("param_generation");
@@ -335,6 +347,29 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     assert.equal(storedSession.archive_path, "");
     assert.equal(storedSession.entry_name, "");
     assert.ok(Number.isInteger(storedSession.updated_at_ms));
+  });
+});
+
+test("ClickHouse replaces a Codex source when archiving moves the same session", async () => {
+  const sessionId = "019f5840-0000-7000-8000-000000000002";
+  const active = createSessionFile({ rows: 2, sessionId });
+  const archived = Path.join(Path.dirname(active), "archived-session.jsonl");
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const base = {
+      dbEngine: "clickhouse",
+      clickhouseDatabase: "tokenomics_archive_move_test",
+      clickhouseUrl: url,
+      progress: false,
+    };
+    await syncDatabase(defaultOptions({ ...base, paths: [active] }));
+    fs.renameSync(active, archived);
+    const report = await syncDatabase(defaultOptions({ ...base, paths: [archived] }));
+
+    assert.equal(report.total.requests, 2);
+    assert.deepEqual(mock.visibleRows("sources").map((row) => row.source_path), [archived]);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
   });
 });
 
