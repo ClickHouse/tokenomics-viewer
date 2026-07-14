@@ -1078,7 +1078,7 @@
 
     function modelMetricCell(row, key) {
       const mix = costMix(row);
-      return '<span class="metric-cell"><strong>' + esc(formatTokenCount(segmentTokens(row, key))) + ' tokens</strong>' +
+      return '<span class="metric-cell"><strong>' + esc(formatTokenCount(segmentTokens(row, key))) + '</strong>' +
         '<span>' + esc(formatUsdCompact(segmentCost(row, key))) + ' · ' + esc(formatPct(mix[key + 'Pct'] || 0)) + '</span></span>';
     }
 
@@ -1104,7 +1104,7 @@
         formatModelPeriod(range) + ' · ' + models.length + ' models · ' + rows.length + ' model/effort rows · ' + formatUsdCompact(totalStats.costUsd || 0);
       renderModelRanking(models, totalStats);
       const table = document.getElementById('models-table');
-      table.innerHTML = '<thead><tr><th>Model</th><th>Effort</th><th>Requests</th><th>Cost</th><th>Share</th><th>Input</th><th>Cache</th><th>Output</th></tr></thead>' +
+      table.innerHTML = '<thead><tr><th>Model</th><th>Effort</th><th>Requests</th><th>Cost</th><th>Share</th><th>Input tokens</th><th>Cache tokens</th><th>Output tokens</th></tr></thead>' +
         '<tbody>' + (rows.length ? rows.map(row => modelTableRow(row, totalStats.costUsd || 0)).join('') : '<tr><td colspan="8" class="muted">No usage in this period</td></tr>') + '</tbody>' +
         (rows.length ? '<tfoot>' + modelTableRow({ provider: '', model: 'Total', effort: '', ...totalStats }, totalStats.costUsd || 0, true) + '</tfoot>' : '');
     }

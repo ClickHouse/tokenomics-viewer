@@ -148,9 +148,10 @@ test("dashboard html exposes a standalone models table and relative and absolute
   assert.match(html, /data-model-date-mode="absolute"/);
   assert.match(html, /id="model-relative-range"/);
   assert.match(html, /<th>Effort<\/th>/);
-  assert.match(html, /<th>Input<\/th>/);
-  assert.match(html, /<th>Cache<\/th>/);
-  assert.match(html, /<th>Output<\/th>/);
+  assert.match(html, /<th>Input tokens<\/th>/);
+  assert.match(html, /<th>Cache tokens<\/th>/);
+  assert.match(html, /<th>Output tokens<\/th>/);
+  assert.doesNotMatch(html, /formatTokenCount\(segmentTokens\(row, key\)\)\) \+ ' tokens'/);
 
   assert.match(html, /id="daily-range-controls"[\s\S]*data-range-days="all"/);
   const dateInputs = html.match(/<input\b[^>]*type=["']date["'][^>]*>/g) || [];
