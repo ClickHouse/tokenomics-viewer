@@ -22,8 +22,15 @@ manual derivation-version discipline.
   replace settings and prices atomically from the API consumer's perspective.
 - Configuration mutation is loopback-only and requires the same-origin custom
   action header used by Sync.
-- Every pricing-affecting revision participates in source fingerprints. The next
-  Sync therefore recomputes stored event costs for unchanged source bytes.
+- The local webserver serializes configuration writes against Sync. Either
+  conflicting operation receives `409` before it can cross the other's commit
+  boundary.
+- Source fingerprints exclude pricing revisions. Price changes operate only on
+  normalized database rows and never reread unchanged source bytes.
+- A successful configuration write makes repriced reports immediately visible.
+  SQLite derives event costs from the active catalog while reading normalized
+  rows. ClickHouse writes revisioned cost overlays and publishes the configuration
+  marker only after both usage and rate-limit overlays are complete.
 - Project summaries expose tariff coverage and per-model aggregates.
 - Project cost UI identifies its basis as an API-equivalent estimate, shows
   unpriced coverage, and separates cache read from cache creation in detail
@@ -40,8 +47,9 @@ manual derivation-version discipline.
   database name, credentials, bind host/port, and source paths remain CLI/env
   inputs because they are required before configuration can be read.
 - Treating API-equivalent estimates as provider invoices or subscription spend.
-- Silent repricing immediately after a configuration write. Stored costs remain
-  marked stale until a successful Sync publishes a recomputed report.
+- Repricing by rescanning JSONL, ZIP, or Zstandard session sources.
+- Publishing a ClickHouse configuration marker before its cost overlays are
+  complete.
 - Unauthenticated or non-loopback configuration writes.
 - Editing provider credentials or arbitrary SQL through the dashboard.
 - Deleting the final usable pricing catalog without an explicit reset path.
@@ -73,22 +81,24 @@ manual derivation-version discipline.
    usage and must display tariff coverage alongside them.
 4. Cache total equals cache creation plus cache read; the detailed breakdown must
    remain available because their rates and optimization actions differ.
-5. Configuration revisions are optimistic-concurrency tokens and derivation
-   inputs, not cosmetic timestamps.
+5. Configuration revisions are optimistic-concurrency and cost-visibility
+   tokens, not source-derivation inputs or cosmetic timestamps.
 6. Invalid, ambiguous, overlapping, or negative pricing rows fail closed.
 7. Backend parity is behavioral: SQLite and ClickHouse return the same normalized
-   configuration and invalidate the same source fingerprints.
+   configuration and both reprice without invalidating source fingerprints.
 
 ## Execution Order
 
 1. Ensure backend schema and seed defaults only when no active configuration
    revision exists.
-2. Load and validate the normalized configuration before source fingerprinting.
-3. Add its pricing revision to each source fingerprint.
-4. Price and persist usage events using that immutable sync configuration.
-5. Publish the report only after the backend's existing sync commit boundary.
-6. On configuration write, atomically publish a new configuration revision and
-   mark the current report as requiring Sync.
+2. Fingerprint sources using source metadata and analytics derivation only.
+3. Price newly imported usage events using the active immutable configuration.
+4. Publish the report only after the backend's existing sync commit boundary.
+5. On configuration write, validate and stage the new revision using optimistic
+   concurrency.
+6. Reprice normalized database rows without opening source files. In ClickHouse,
+   write usage and rate-limit cost overlays before the revision marker.
+7. Replace the in-process report cache after repricing; no Sync is required.
 
 ## Falsifier Roster
 
@@ -102,8 +112,12 @@ manual derivation-version discipline.
 - Invalid catalog: negative prices, malformed provider slugs, overlapping rows,
   invalid context variants, unsupported basis labels, and an empty catalog are
   rejected.
-- Configuration change: an unchanged source gets a different fingerprint and is
-  repriced on the next Sync.
+- Configuration change: report costs change immediately, source fingerprints and
+  import timestamps remain unchanged, and the next Sync reports no changed source.
+- Legacy fingerprint: obsolete pricing fields are ignored without causing a
+  one-time full reimport.
+- ClickHouse publication failure: a missing overlay or failed repricing query
+  leaves the previous configuration revision visible.
 - Backend parity: seeded and edited configuration round-trips identically through
   SQLite and ClickHouse.
 - Remote binding or missing action header: configuration mutation is rejected.

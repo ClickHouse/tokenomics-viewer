@@ -10,7 +10,6 @@ const test = require("node:test");
 const { buildReportFromClickHouse, loadConfiguration, saveConfiguration, syncDatabase } = require("../app");
 const {
   ANALYTICS_DERIVATION_VERSION,
-  PRICING_CATALOG_VERSION,
 } = require("../lib/core/derivation");
 const { createClickHouseBackend } = require("../lib/storage/clickhouse");
 const { defaultOptions } = require("./support/fixtures");
@@ -50,7 +49,7 @@ function createSessionFile({ rows, project = "/tmp/project-clickhouse-test", ses
   return filename;
 }
 
-function createClickHouseServer({ failureStatus = null, failureBody = "", failureAfterInsert = null } = {}) {
+function createClickHouseServer({ failureStatus = null, failureBody = "", failureAfterInsert = null, failureQueryIncludes = null } = {}) {
   const requests = [];
   const inserts = {};
   const activeRows = {};
@@ -117,6 +116,11 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
 
       if (failureStatus !== null) {
         sendFailure(failureStatus, failureBody);
+        return;
+      }
+      if (failureQueryIncludes && !injectedFailureTriggered && query.includes(failureQueryIncludes)) {
+        injectedFailureTriggered = true;
+        sendFailure(503, "injected query failure");
         return;
       }
 
@@ -295,10 +299,27 @@ test("ClickHouse configuration revisions publish marker-last and reject stale wr
     await assert.rejects(saveConfiguration(options, edited), /configuration revision conflict/);
     const settingsInsert = mock.requests.findIndex((request) => request.query.startsWith("INSERT INTO analytics_settings"));
     const pricingInsert = mock.requests.findIndex((request) => request.query.startsWith("INSERT INTO pricing_catalog"));
+    const usageOverlay = mock.requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
+    const rateLimitOverlay = mock.requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
     const markerInsert = mock.requests.findLastIndex((request) => request.query.startsWith("INSERT INTO configuration_revisions"));
-    assert.ok(settingsInsert >= 0 && pricingInsert > settingsInsert && markerInsert > pricingInsert);
+    assert.ok(settingsInsert >= 0 && pricingInsert > settingsInsert);
+    assert.ok(usageOverlay > pricingInsert && rateLimitOverlay > usageOverlay && markerInsert > rateLimitOverlay);
     assert.ok(mock.requests.some((request) => request.query.includes("SELECT DISTINCT key, value_json")));
     assert.ok(mock.requests.some((request) => request.query.includes("SELECT DISTINCT *") && request.query.includes("FROM pricing_catalog")));
+  });
+});
+
+test("ClickHouse pricing overlay failure leaves the previous configuration visible", async () => {
+  const mock = createClickHouseServer({ failureQueryIncludes: "INSERT INTO rate_limit_sample_costs" });
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_reprice_failure_test" });
+    const initial = await loadConfiguration(options);
+    const edited = structuredClone(initial);
+    edited.settings.regionalMultiplier = 1.1;
+
+    await assert.rejects(saveConfiguration(options, edited), /injected query failure/);
+    assert.equal((await loadConfiguration(options)).revision, initial.revision);
+    assert.equal(mock.activeRows.configuration_revisions.length, 1);
   });
 });
 
@@ -655,7 +676,7 @@ test("ClickHouse sync imports JSONL entries from ZIP sources", async () => {
   const storedSource = mock.visibleRows("sources").find((row) => row.source_path === `${zip}:${Path.basename(jsonl)}`);
   assert.ok(storedSource);
   assert.match(storedSource.fingerprint, new RegExp(`analyticsDerivationVersion=${ANALYTICS_DERIVATION_VERSION}`));
-  assert.match(storedSource.fingerprint, new RegExp(`pricingCatalogVersion=${PRICING_CATALOG_VERSION}`));
+  assert.doesNotMatch(storedSource.fingerprint, /pricing(?:CatalogVersion|Revision)=/);
   const storedSession = JSON.parse(mock.inserts.sessions[0].body.trim());
   assert.equal(storedSession.kind, "zip-entry");
   assert.equal(storedSession.archive_path, zip);

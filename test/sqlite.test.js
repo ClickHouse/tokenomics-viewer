@@ -9,11 +9,9 @@ const test = require("node:test");
 const { buildReport, buildReportFromDatabase, loadConfiguration, saveConfiguration, syncDatabase } = require("../app");
 const {
   ANALYTICS_DERIVATION_VERSION,
-  PRICING_CATALOG_VERSION,
   sourceFingerprint,
 } = require("../lib/core/derivation");
 const { createSqliteBackend } = require("../lib/storage/sqlite");
-const { PACKAGED_CONFIGURATION_REVISION } = require("../lib/core/configuration");
 const { defaultOptions } = require("./support/fixtures");
 
 function totalSnapshot(report) {
@@ -158,7 +156,7 @@ test("syncDatabase imports sources idempotently and replaces changed sessions", 
   assert.equal(fromDb.total.output, 300_000);
 });
 
-test("pricing edits mark stored SQLite costs stale and reprice unchanged sources on sync", async () => {
+test("pricing edits reprice SQLite reports immediately without reimporting unchanged sources", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-db-reprice-test-"));
   const jsonl = Path.join(tmp, "session.jsonl");
   const db = Path.join(tmp, "tokenomics.sqlite");
@@ -177,21 +175,25 @@ test("pricing edits mark stored SQLite costs stale and reprice unchanged sources
   ].join("\n"));
   const options = defaultOptions({ db, paths: [jsonl] });
   const before = await syncDatabase(options);
+  const storedBefore = new DatabaseSync(db);
+  const sourceBefore = storedBefore.prepare("SELECT fingerprint, imported_at FROM sources WHERE source_path = ?").get(jsonl);
+  storedBefore.close();
   const configuration = await loadConfiguration(options);
   const edited = structuredClone(configuration);
   edited.settings.pricingBasis = "custom";
   edited.prices.find((row) => row.provider === "openai" && row.model === "gpt-5-codex" && row.variant === "short").input *= 2;
   const saved = await saveConfiguration(options, edited);
 
-  const stale = buildReportFromDatabase(db, options);
-  assert.equal(stale.configurationRevision, saved.revision);
-  assert.equal(stale.pricingStale, true);
-  assert.equal(stale.total.costUsd, before.total.costUsd);
-
-  const repriced = await syncDatabase(options);
+  const repriced = buildReportFromDatabase(db, options);
   assert.equal(repriced.configurationRevision, saved.revision);
   assert.equal(repriced.pricingStale, false);
   assert.ok(repriced.total.costUsd > before.total.costUsd);
+
+  await syncDatabase(options);
+  const storedAfter = new DatabaseSync(db);
+  const sourceAfter = storedAfter.prepare("SELECT fingerprint, imported_at FROM sources WHERE source_path = ?").get(jsonl);
+  storedAfter.close();
+  assert.deepEqual({ ...sourceAfter }, { ...sourceBefore });
 });
 
 test("SQLite persists versioned fingerprints and reimports a stale derivation", async () => {
@@ -206,13 +208,11 @@ test("SQLite persists versioned fingerprints and reimports a stale derivation", 
     kind: "jsonl",
     size: stat.size,
     mtimeMs: stat.mtimeMs,
-    pricingRevision: PACKAGED_CONFIGURATION_REVISION,
   });
   const stored = new DatabaseSync(db);
   try {
     assert.equal(stored.prepare("SELECT fingerprint FROM sources WHERE source_path = ?").get(jsonl).fingerprint, currentFingerprint);
     assert.match(currentFingerprint, new RegExp(`analyticsDerivationVersion=${ANALYTICS_DERIVATION_VERSION}`));
-    assert.match(currentFingerprint, new RegExp(`pricingCatalogVersion=${PRICING_CATALOG_VERSION}`));
     assert.equal(stored.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, "1");
     stored.prepare("UPDATE sources SET fingerprint = ? WHERE source_path = ?").run(
       sourceFingerprint({ kind: "jsonl", size: stat.size, mtimeMs: stat.mtimeMs }, {

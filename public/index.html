@@ -1781,7 +1781,7 @@
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Configuration save failed: HTTP ' + response.status);
         configurationState = body.configuration;
-        configurationRequiresSync = true;
+        configurationRequiresSync = Boolean(body.requiresSync);
         renderPricingEditor();
       } catch (error) {
         renderConfigurationStatus(error.message, true);

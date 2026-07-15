@@ -163,8 +163,12 @@ test("configuration API is readable but loopback and action-header protected for
     prices: [],
   };
   let saved = null;
+  let reportBuilds = 0;
   const web = createWebServer({
-    buildReportFromSelectedDatabase: async () => ({ ...newReport(), configurationRevision: "catalog-a" }),
+    buildReportFromSelectedDatabase: async () => {
+      reportBuilds += 1;
+      return { ...newReport(), configurationRevision: "catalog-b", pricingStale: false };
+    },
     resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-config-api.sqlite"),
     loadConfiguration: async () => configuration,
     saveConfiguration: async (_options, next) => {
@@ -223,9 +227,64 @@ test("configuration API is readable but loopback and action-header protected for
       body: JSON.stringify(configuration),
     });
     assert.equal(accepted.status, 200);
-    assert.equal((await accepted.json()).configuration.revision, "catalog-b");
+    const acceptedBody = await accepted.json();
+    assert.equal(acceptedBody.configuration.revision, "catalog-b");
+    assert.equal(acceptedBody.requiresSync, false);
     assert.equal(saved.revision, "catalog-a");
+    assert.equal(reportBuilds, 1);
+
+    const summary = await fetch(`${base}/api/summary`);
+    assert.equal((await summary.json()).configurationRevision, "catalog-b");
+    assert.equal(reportBuilds, 1);
   } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("sync cannot start while a configuration save is pending", async () => {
+  let releaseSave;
+  let saveStarted;
+  const started = new Promise((resolve) => { saveStarted = resolve; });
+  const gate = new Promise((resolve) => { releaseSave = resolve; });
+  let syncCalls = 0;
+  const configuration = { revision: "catalog-a", settings: {}, prices: [] };
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => ({ ...newReport(), configurationRevision: "catalog-b" }),
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-config-save-lock.sqlite"),
+    loadConfiguration: async () => configuration,
+    saveConfiguration: async () => {
+      saveStarted();
+      await gate;
+      return { ...configuration, revision: "catalog-b" };
+    },
+    syncDatabase: async () => {
+      syncCalls += 1;
+      return newReport();
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    preloadedReport: newReport(),
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const saving = fetch(`${base}/api/configuration`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-tokenomics-action": "configuration" },
+      body: JSON.stringify(configuration),
+    });
+    await started;
+    const blockedSync = await fetch(`${base}/api/sync`, {
+      method: "POST",
+      headers: { "x-tokenomics-action": "sync" },
+    });
+    assert.equal(blockedSync.status, 409);
+    assert.equal(syncCalls, 0);
+    releaseSave();
+    assert.equal((await saving).status, 200);
+  } finally {
+    releaseSave();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
@@ -341,6 +400,7 @@ test("sync endpoint requires a same-origin custom action header", async () => {
 
 test("sync endpoint coalesces concurrent runs and atomically publishes the new report", async () => {
   let syncCalls = 0;
+  let configurationSaves = 0;
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const oldReport = { ...newReport(), marker: "old" };
@@ -348,6 +408,11 @@ test("sync endpoint coalesces concurrent runs and atomically publishes the new r
   const web = createWebServer({
     buildReportFromSelectedDatabase: async () => oldReport,
     resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-coalesced-sync.sqlite"),
+    loadConfiguration: async () => ({ revision: "catalog-a", settings: {}, prices: [] }),
+    saveConfiguration: async () => {
+      configurationSaves += 1;
+      return { revision: "catalog-b", settings: {}, prices: [] };
+    },
     syncDatabase: async () => {
       syncCalls += 1;
       await gate;
@@ -377,6 +442,13 @@ test("sync endpoint coalesces concurrent runs and atomically publishes the new r
     assert.equal(second.sync.state, "running");
     assert.equal((await fetch(`${base}/api/sync`).then((response) => response.json())).sync.state, "running");
     assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "old");
+    const blockedConfiguration = await fetch(`${base}/api/configuration`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-tokenomics-action": "configuration" },
+      body: JSON.stringify({ revision: "catalog-a", settings: {}, prices: [] }),
+    });
+    assert.equal(blockedConfiguration.status, 409);
+    assert.equal(configurationSaves, 0);
 
     release();
     await server.syncController.waitForIdle();

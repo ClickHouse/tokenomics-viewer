@@ -279,10 +279,11 @@ Each source version is immutable. A sync stages changed sources and a complete
 source manifest, then publishes one global generation marker last. Reports pin
 that generation for every aggregation query, so a failed multi-source sync
 leaves the previous complete report visible instead of exposing a partial mix.
-Source fingerprints include independent analytics-derivation and pricing-catalog
-versions. Bumping either version automatically reimports unchanged source files,
-so stored token splits and estimated costs cannot silently outlive the code that
-derived them. Database schema versioning remains a separate concern.
+Source fingerprints cover source identity and analytics derivation only. Pricing
+revisions are deliberately excluded: changing a rate must not read or reimport
+session files. Legacy fingerprints containing pricing fields are compared using
+the same canonical form, so this migration does not trigger a one-time full
+reimport. Database schema versioning remains a separate concern.
 
 The web dashboard reuses the report produced by startup sync instead of
 rebuilding it for every API request. In ClickHouse mode, summary buckets are
@@ -364,10 +365,12 @@ to:
 - set OpenAI short/long context selection and a global rate multiplier.
 
 Configuration saves use an optimistic revision and are allowed only on a
-loopback-bound dashboard. Saving publishes the new catalog but does not silently
-rewrite stored history. The dashboard shows **Sync required** until the next
-Sync reprocesses unchanged source files with the new pricing revision. A failed
-or partial sync leaves the report marked stale.
+loopback-bound dashboard. Saving applies the catalog immediately from normalized
+database rows; it never rereads JSONL, ZIP, or Zstandard session sources. SQLite
+derives costs from the active catalog while reading normalized rows. ClickHouse
+writes a compact revisioned cost overlay with one `INSERT SELECT`, then publishes
+the configuration marker last. If repricing fails, the previous configuration
+and costs remain visible.
 
 Custom providers are priced when an ingested record identifies the same provider
 slug. Adding a catalog row cannot infer a provider that is absent from the source
