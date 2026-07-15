@@ -42,9 +42,9 @@
     .label { color:var(--muted); font-size:12px; }
     .value { font-size:22px; font-weight:700; margin-top:3px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
     .token-card .value { font-size:16px; white-space:nowrap; }
-    .analysis-grid { display:grid; grid-template-columns:minmax(360px, .9fr) minmax(0, 1.35fr); gap:14px; align-items:stretch; }
     .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:8px; }
     .panel-title-stack { display:grid; gap:6px; min-width:0; }
+    .chart-head-meta { display:grid; justify-items:end; gap:8px; min-width:0; }
     h2 { margin:0; font-size:16px; }
     .control-select { max-width:min(420px, 100%); min-width:220px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--fg); padding:6px 28px 6px 8px; }
     .segmented { display:inline-flex; align-items:center; gap:2px; border:1px solid var(--line); border-radius:6px; padding:2px; background:var(--soft); }
@@ -52,8 +52,8 @@
     .seg-button.active { background:var(--panel); color:var(--fg); box-shadow:0 0 0 1px var(--line); }
     .swatch { width:10px; height:10px; border-radius:999px; display:inline-block; }
     .chart-wrap { position:relative; min-height:390px; }
-    .compact-chart-wrap, .project-chart-wrap { position:relative; min-height:330px; }
-    .chart-tooltip { position:absolute; z-index:4; display:none; min-width:250px; max-width:min(420px, calc(100% - 16px)); max-height:260px; overflow:auto; padding:9px 10px; border:1px solid var(--line); border-radius:6px; background:color-mix(in srgb, var(--panel) 96%, transparent); box-shadow:0 8px 24px rgba(0,0,0,.16); pointer-events:none; font-size:12px; }
+    .project-chart-wrap { position:relative; min-height:330px; }
+    .chart-tooltip { position:absolute; z-index:4; display:none; width:420px; max-width:calc(100% - 16px); max-height:260px; overflow:auto; padding:9px 10px; border:1px solid var(--line); border-radius:6px; background:color-mix(in srgb, var(--panel) 96%, transparent); box-shadow:0 8px 24px rgba(0,0,0,.16); pointer-events:none; font-size:12px; }
     .chart-tooltip.visible { display:block; }
     .tooltip-title { font-weight:700; margin-bottom:5px; }
     .tooltip-row { display:grid; grid-template-columns:minmax(110px, 1fr) auto; gap:12px; align-items:center; padding:4px 0; border-top:1px solid var(--line); }
@@ -62,7 +62,6 @@
     .tooltip-value { text-align:right; font-variant-numeric:tabular-nums; }
     .mix-canvas { width:100%; height:390px; display:block; cursor:crosshair; touch-action:none; }
     .compact-canvas { height:330px; }
-    .range-row { display:flex; justify-content:flex-end; margin-top:-4px; }
     .model-ranking { min-height:250px; }
     .model-table { width:100%; border-collapse:collapse; table-layout:fixed; }
     .model-table th, .model-table td { padding:7px 6px; }
@@ -74,6 +73,11 @@
     .date-control-group { display:flex; align-items:center; gap:6px; }
     .date-input { min-height:32px; border:1px solid var(--line); border-radius:6px; padding:5px 7px; color:var(--fg); background:var(--panel); }
     .date-label { display:flex; align-items:center; gap:5px; color:var(--muted); font-size:12px; }
+    .chart-help { position:relative; width:26px; height:26px; border:1px solid var(--line); border-radius:50%; padding:0; color:var(--muted); background:var(--panel); cursor:help; font-weight:700; }
+    .chart-help::after { content:attr(data-tooltip); position:absolute; z-index:8; top:calc(100% + 8px); right:0; width:280px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; color:var(--fg); background:var(--panel); box-shadow:0 8px 24px rgba(0,0,0,.16); font-size:12px; font-weight:400; line-height:1.4; text-align:left; pointer-events:none; opacity:0; transform:translateY(-3px); transition:opacity .12s ease, transform .12s ease; }
+    .chart-help:hover::after, .chart-help:focus-visible::after { opacity:1; transform:translateY(0); }
+    .mix-canvas[data-interaction="pan"] { cursor:grab; }
+    .mix-canvas[data-interaction="pan"]:active { cursor:grabbing; }
     .model-detail-table { width:100%; border-collapse:collapse; min-width:1120px; }
     .model-detail-table th:first-child, .model-detail-table td:first-child { text-align:left; }
     .model-detail-table tfoot td { border-top:2px solid var(--line); font-weight:650; }
@@ -126,10 +130,13 @@
     .recommendation-meta, .recommendation-caveat { color:var(--muted); font-size:12px; }
     body[data-dashboard-mode="overview"] .analyst-only { display:none !important; }
     body[data-dashboard-mode="analyst"] .overview-only { display:none !important; }
-    body[data-dashboard-mode="overview"] .analysis-grid { grid-template-columns:1fr; }
-    @media (max-width: 1180px) { .cards { grid-template-columns:repeat(3, minmax(0, 1fr)); } .card:nth-child(3) { border-right:0; } .card:nth-child(n+4) { border-top:1px solid var(--line); } .analysis-grid { grid-template-columns:1fr; } }
-    @media (max-width: 760px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } .card, .card:nth-child(3) { border-right:1px solid var(--line); border-top:1px solid var(--line); } .card:nth-child(-n+2) { border-top:0; } .card:nth-child(2n) { border-right:0; } .card:last-child { grid-column:1 / -1; border-right:0; } .panel-head { display:grid; } .hover-legend { justify-content:flex-start; } .date-controls { justify-content:flex-start; } .recommendation-list { grid-template-columns:1fr; } .recommendation-item:nth-child(odd) { border-right:0; } .settings-grid { grid-template-columns:1fr; } .settings-actions { justify-content:flex-start; } .pricing-table th:nth-child(2), .pricing-table td:nth-child(2) { position:static; box-shadow:none; } }
-    @media (max-width: 560px) { .brand-row { align-items:flex-start; flex-wrap:wrap; } .brand-group { align-items:flex-start; flex-direction:column; gap:3px; } .header-actions { width:100%; justify-content:space-between; } .sync-state { max-width:240px; } .section-nav { gap:18px; } main { padding:12px; } section { scroll-margin-top:170px; } .cards { grid-template-columns:1fr; } .card, .card:nth-child(3), .card:nth-child(2n) { border-right:0; border-top:1px solid var(--line); } .card:first-child { border-top:0; } .card:last-child { grid-column:auto; } .token-card .value { white-space:normal; } .chart-wrap, .compact-chart-wrap, .project-chart-wrap { min-height:330px; } .mix-canvas { height:330px; } .range-row { justify-content:flex-start; overflow:auto; } }
+    #pricing-settings { display:none; }
+    body[data-dashboard-mode="settings"] main > :not(#pricing-settings) { display:none !important; }
+    body[data-dashboard-mode="settings"] #pricing-settings { display:block; }
+    body[data-dashboard-mode="settings"] .section-nav { display:none; }
+    @media (max-width: 1180px) { .cards { grid-template-columns:repeat(3, minmax(0, 1fr)); } .card:nth-child(3) { border-right:0; } .card:nth-child(n+4) { border-top:1px solid var(--line); } }
+    @media (max-width: 760px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } .card, .card:nth-child(3) { border-right:1px solid var(--line); border-top:1px solid var(--line); } .card:nth-child(-n+2) { border-top:0; } .card:nth-child(2n) { border-right:0; } .card:last-child { grid-column:1 / -1; border-right:0; } .panel-head { display:grid; } .chart-head-meta { justify-items:start; } .hover-legend { justify-content:flex-start; } .date-controls { justify-content:flex-start; } .recommendation-list { grid-template-columns:1fr; } .recommendation-item:nth-child(odd) { border-right:0; } .settings-grid { grid-template-columns:1fr; } .settings-actions { justify-content:flex-start; } .pricing-table th:nth-child(2), .pricing-table td:nth-child(2) { position:static; box-shadow:none; } }
+    @media (max-width: 560px) { .brand-row { align-items:flex-start; flex-wrap:wrap; } .brand-group { align-items:flex-start; flex-direction:column; gap:3px; } .header-actions { width:100%; justify-content:space-between; } .sync-state { max-width:240px; } .section-nav { gap:18px; } main { padding:12px; } section { scroll-margin-top:170px; } .cards { grid-template-columns:1fr; } .card, .card:nth-child(3), .card:nth-child(2n) { border-right:0; border-top:1px solid var(--line); } .card:first-child { border-top:0; } .card:last-child { grid-column:auto; } .token-card .value { white-space:normal; } .chart-wrap, .project-chart-wrap { min-height:330px; } .mix-canvas { height:330px; } .date-control-group { flex-wrap:wrap; } .chart-help::after { position:fixed; inset:auto 12px 12px 12px; width:auto; transform:translateY(3px); } }
   </style>
 </head>
 <body data-dashboard-mode="overview">
@@ -143,6 +150,7 @@
         <div class="segmented" id="dashboard-mode-controls" aria-label="Dashboard mode">
           <button class="seg-button active" type="button" data-dashboard-mode="overview" aria-pressed="true">Overview</button>
           <button class="seg-button" type="button" data-dashboard-mode="analyst" aria-pressed="false">Analyst</button>
+          <button class="seg-button" type="button" data-dashboard-mode="settings" aria-pressed="false">Settings</button>
         </div>
         <button class="action-button" id="sync-dashboard" type="button" title="Scan logs and update the database" disabled>Sync</button>
       </div>
@@ -151,7 +159,6 @@
       <button class="nav-button active" type="button" data-section-target="overview-section">Summary</button>
       <button class="nav-button analyst-only" type="button" data-section-target="projects-section">Projects</button>
       <button class="nav-button" type="button" data-section-target="models-section">Models</button>
-      <button class="nav-button analyst-only" type="button" data-section-target="pricing-settings">Pricing</button>
       <button class="nav-button analyst-only" type="button" data-section-target="efficiency-section">Diagnostics</button>
     </nav>
   </header>
@@ -167,57 +174,58 @@
           <h2>Token Flow</h2>
           <div class="hover-legend" id="daily-token-hover-legend"></div>
         </div>
-        <div class="segmented" id="token-resolution-controls" aria-label="Token flow resolution">
-          <button class="seg-button" type="button" data-token-resolution="15m">15m</button>
-          <button class="seg-button" type="button" data-token-resolution="hourly">Hourly</button>
-          <button class="seg-button active" type="button" data-token-resolution="daily">Daily</button>
+        <div class="date-controls">
+          <div class="segmented" id="token-interaction-controls" aria-label="Token Flow pointer mode">
+            <button class="seg-button active" type="button" data-chart-interaction="pan" aria-pressed="true" title="Drag left or right to move through time">Pan</button>
+            <button class="seg-button" type="button" data-chart-interaction="zoom" aria-pressed="false" title="Drag across a time range to zoom in">Zoom</button>
+          </div>
+          <button class="chart-help" type="button" aria-label="Token Flow mouse controls" data-tooltip="Hover anywhere: inspect the nearest interval. Wheel: zoom at pointer. Pan: drag left or right. Zoom: drag to select a range. Double-click: reset." title="Mouse controls">?</button>
+          <div class="segmented" id="token-date-mode-controls" aria-label="Token Flow date mode">
+            <button class="seg-button active" type="button" data-timeline-date-mode="relative" aria-pressed="true">Relative</button>
+            <button class="seg-button" type="button" data-timeline-date-mode="absolute" aria-pressed="false">Absolute</button>
+          </div>
+          <select class="date-input" id="token-relative-range" aria-label="Token Flow relative date range">
+            <option value="30">1M</option><option value="90" selected>3M</option><option value="180">6M</option><option value="365">1Y</option><option value="all">All</option>
+          </select>
+          <div class="date-control-group is-hidden" id="token-absolute-range">
+            <label class="date-label">From <input class="date-input" id="token-date-from" type="date"></label>
+            <label class="date-label">To <input class="date-input" id="token-date-to" type="date"></label>
+          </div>
         </div>
       </div>
-      <div class="chart-wrap"><canvas class="mix-canvas" id="daily-token-canvas" role="img" aria-label="Daily input, cache, and output token mix"></canvas></div>
-      <div class="range-row">
-        <div class="segmented" id="daily-range-controls" aria-label="Daily chart range">
-          <button class="seg-button" type="button" data-range-days="30">1M</button>
-          <button class="seg-button active" type="button" data-range-days="90">3M</button>
-          <button class="seg-button" type="button" data-range-days="180">6M</button>
-          <button class="seg-button" type="button" data-range-days="365">1Y</button>
-          <button class="seg-button" type="button" data-range-days="all">All</button>
-        </div>
-      </div>
+      <div class="chart-wrap"><canvas class="mix-canvas" id="daily-token-canvas" role="img" aria-label="Adaptive input, cache, and output token flow"></canvas></div>
     </section>
-    <div class="analysis-grid">
-      <section id="cost-mix-section">
-        <div class="panel-head">
-          <div class="panel-title-stack">
-            <h2>Cost Mix</h2>
-            <div class="hover-legend" id="cost-mix-hover-legend"></div>
-          </div>
-          <div class="segmented" id="cost-mix-controls" aria-label="Cost mix period">
-            <button class="seg-button" type="button" data-mix-mode="15m">15m</button>
-            <button class="seg-button" type="button" data-mix-mode="hourly">Hourly</button>
-            <button class="seg-button" type="button" data-mix-mode="daily">Daily</button>
-            <button class="seg-button" type="button" data-mix-mode="weekly">Weekly</button>
-            <button class="seg-button" type="button" data-mix-mode="monthly">Monthly</button>
-          </div>
-        </div>
-        <div class="compact-chart-wrap" id="cost-chart-wrap"><canvas class="mix-canvas compact-canvas" id="cost-mix-canvas" role="img" aria-label="Cost mix by selected period"></canvas></div>
-      </section>
-      <section class="analyst-only" id="projects-section">
+    <section class="analyst-only" id="projects-section">
         <div class="panel-head">
           <div class="panel-title-stack">
             <h2>Project Cost</h2>
             <select class="control-select" id="project-select" aria-label="Project"></select>
-            <div class="segmented" id="project-resolution-controls" aria-label="Project cost resolution">
-              <button class="seg-button" type="button" data-project-resolution="15m">15m</button>
-              <button class="seg-button active" type="button" data-project-resolution="hourly">Hourly</button>
-              <button class="seg-button" type="button" data-project-resolution="daily">Daily</button>
-            </div>
           </div>
-          <div class="hover-legend" id="project-hover-legend"></div>
+          <div class="chart-head-meta">
+            <div class="date-controls">
+              <div class="segmented" id="project-interaction-controls" aria-label="Project Cost pointer mode">
+                <button class="seg-button active" type="button" data-chart-interaction="pan" aria-pressed="true" title="Drag left or right to move through time">Pan</button>
+                <button class="seg-button" type="button" data-chart-interaction="zoom" aria-pressed="false" title="Drag across a time range to zoom in">Zoom</button>
+              </div>
+              <button class="chart-help" type="button" aria-label="Project Cost mouse controls" data-tooltip="Hover anywhere: inspect the nearest interval. Wheel: zoom at pointer. Pan: drag left or right. Zoom: drag to select a range. Double-click: reset." title="Mouse controls">?</button>
+              <div class="segmented" id="project-date-mode-controls" aria-label="Project Cost date mode">
+                <button class="seg-button active" type="button" data-timeline-date-mode="relative" aria-pressed="true">Relative</button>
+                <button class="seg-button" type="button" data-timeline-date-mode="absolute" aria-pressed="false">Absolute</button>
+              </div>
+              <select class="date-input" id="project-relative-range" aria-label="Project Cost relative date range">
+                <option value="30">1M</option><option value="90" selected>3M</option><option value="180">6M</option><option value="365">1Y</option><option value="all">All</option>
+              </select>
+              <div class="date-control-group is-hidden" id="project-absolute-range">
+                <label class="date-label">From <input class="date-input" id="project-date-from" type="date"></label>
+                <label class="date-label">To <input class="date-input" id="project-date-to" type="date"></label>
+              </div>
+            </div>
+            <div class="hover-legend" id="project-hover-legend"></div>
+          </div>
         </div>
-        <div class="project-chart-wrap"><canvas class="mix-canvas compact-canvas" id="project-cost-canvas" role="img" aria-label="Daily project cost with input, cache, and output cost mix"></canvas></div>
+        <div class="project-chart-wrap"><canvas class="mix-canvas compact-canvas" id="project-cost-canvas" role="img" aria-label="Adaptive project cost with input, cache, and output cost mix"></canvas></div>
         <div class="project-model-summary table-scroll"><table class="project-model-table" id="project-model-breakdown"></table></div>
-      </section>
-    </div>
+    </section>
     <section id="models-section">
       <div class="panel-head">
         <div class="panel-title-stack">
@@ -245,7 +253,7 @@
       <div class="model-ranking overview-only" id="model-ranking"></div>
       <div class="table-scroll analyst-only"><table class="model-detail-table" id="models-table"></table></div>
     </section>
-    <section class="analyst-only" id="pricing-settings">
+    <section id="pricing-settings">
       <div class="panel-head">
         <div class="panel-title-stack">
           <h2>Pricing &amp; Analytics Settings</h2>
@@ -282,6 +290,7 @@
       </div>
     </section>
   </main>
+  <script src="/timeline.js"></script>
   <script>
     const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2 });
     const compact = new Intl.NumberFormat('en-US', { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 });
@@ -502,56 +511,47 @@
       }
     }
 
-    const projectChart = {
-      canvasId: 'project-cost-canvas',
-      legendId: 'project-hover-legend',
-      rows: [],
-      selectedProject: null,
-      selectedProjectName: null,
-      nodes: [],
-      hoverIndex: null,
-      pinnedIndex: null,
-      dragStartX: null,
-      dragCurrentX: null,
-      plot: null,
-      zoom: { start: 0, end: 0 },
-      dataKey: null,
-      config: null,
-      wheelZoomDelta: 0,
-    };
     const WHEEL_ZOOM_DELTA_STEP = 80;
-    const WHEEL_ZOOM_FACTOR = 1.16;
     function createSharedMixChart(canvasId, legendId) {
       return {
         canvasId,
         legendId,
+        sourceRows: [],
         rows: [],
         nodes: [],
-        zoom: { start: 0, end: 0 },
+        fullDomain: null,
+        domain: null,
+        resolution: null,
+        interaction: 'pan',
         hoverIndex: null,
+        pinnedIndex: null,
         dragStartX: null,
         dragCurrentX: null,
+        dragDomain: null,
         plot: null,
         dataKey: null,
         config: null,
+        baseConfig: null,
         wheelZoomDelta: 0,
       };
     }
 
     const dailyTokenChart = createSharedMixChart('daily-token-canvas', 'daily-token-hover-legend');
-    const costChart = createSharedMixChart('cost-mix-canvas', 'cost-mix-hover-legend');
+    const projectChart = createSharedMixChart('project-cost-canvas', 'project-hover-legend');
+    projectChart.selectedProject = null;
+    projectChart.selectedProjectName = null;
     const sharedMixSegments = [
       { key: 'input', pctKey: 'inputPct', label: 'In', color: () => colors.input },
       { key: 'cache', pctKey: 'cachePct', label: 'Cache', color: () => colors.cache },
       { key: 'output', pctKey: 'outputPct', label: 'Out', color: () => colors.output },
     ];
-    const modelPalette = ['#2563eb', '#0f9f6e', '#d64b22', '#b7791f', '#0891b2', '#c0266d', '#5b8c32', '#7c5cfc', '#00897b', '#d97706'];
-
-    function modelColor(name) {
-      let hash = 0;
-      for (const char of String(name || 'unknown')) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
-      return modelPalette[Math.abs(hash) % modelPalette.length];
-    }
+    const modelPalette = [
+      '#2563eb', '#d64b22', '#0f9f6e', '#7c3aed', '#b7791f', '#0891b2',
+      '#c0266d', '#5b8c32', '#4f46e5', '#dc2626', '#00897b', '#9333ea',
+      '#65a30d', '#0284c7', '#e11d48', '#059669', '#d97706', '#6366f1',
+      '#be185d', '#0d9488', '#a16207', '#0369a1', '#6d28d9', '#15803d',
+    ];
+    const modelColor = TokenomicsTimeline.createCategoricalColorScale(modelPalette);
 
     function drawSharedModelSeries(ctx, points, config, y) {
       if (!config.showModels) return;
@@ -624,7 +624,7 @@
           return '<div class="tooltip-row"><div class="tooltip-model"><span class="swatch" style="background:' + esc(modelColor(model.name)) + '"></span><span title="' + esc(model.name) + '">' + esc(model.name) + '</span></div>' +
             '<div class="tooltip-value">' + esc(formatUsdCompact(model.costUsd || 0)) + ' / ' + esc(formatTokenCount(totalTokens(model))) + ' / ' + esc(formatPct(share)) + '</div></div>';
         }).join('');
-      tooltip.style.left = Math.max(8, Math.min(point.x + 12, canvasWidth - 300)) + 'px';
+      tooltip.style.left = Math.max(8, Math.min(point.x + 12, canvasWidth - 432)) + 'px';
       tooltip.style.top = Math.max(8, point.y - 24) + 'px';
       tooltip.classList.add('visible');
     }
@@ -633,56 +633,30 @@
       return config.key + '|' + rows.map(row => row.name).join('\\u0000');
     }
 
-    function visibleSharedRange(chart) {
-      const count = chart.rows.length;
-      if (count === 0) return { start: 0, end: -1 };
-      return {
-        start: clamp(chart.zoom.start, 0, count - 1),
-        end: clamp(chart.zoom.end, 0, count - 1),
-      };
+    function resetSharedChartDomain(chart) {
+      chart.dataKey = null;
+      chart.fullDomain = null;
+      chart.domain = null;
+      chart.hoverIndex = null;
+      chart.pinnedIndex = null;
     }
 
     function rerenderSharedMixChart(chart) {
-      if (chart.config) renderSharedMixChart(chart, chart.rows, chart.config);
+      if (chart.baseConfig) renderSharedMixChart(chart, chart.sourceRows, chart.baseConfig);
     }
 
-    function applySharedZoom(chart, start, end) {
-      const count = chart.rows.length;
-      if (count === 0) return;
-      let nextStart = Math.round(Math.min(start, end));
-      let nextEnd = Math.round(Math.max(start, end));
-      const minWindow = Math.min(1, count);
-      if (nextEnd - nextStart + 1 < minWindow) {
-        const center = (nextStart + nextEnd) / 2;
-        nextStart = Math.round(center - (minWindow - 1) / 2);
-        nextEnd = nextStart + minWindow - 1;
-      }
-      if (nextStart < 0) {
-        nextEnd -= nextStart;
-        nextStart = 0;
-      }
-      if (nextEnd >= count) {
-        nextStart -= nextEnd - count + 1;
-        nextEnd = count - 1;
-      }
-      chart.zoom.start = clamp(nextStart, 0, count - 1);
-      chart.zoom.end = clamp(nextEnd, chart.zoom.start, count - 1);
+    function applySharedDomain(chart, domain) {
+      if (!domain || !chart.fullDomain) return;
+      chart.domain = domain;
+      chart.hoverIndex = null;
+      chart.pinnedIndex = null;
       rerenderSharedMixChart(chart);
     }
 
     function zoomSharedChartAt(chart, canvasX, direction) {
-      const count = chart.rows.length;
-      if (count <= 1 || !chart.plot) return;
-      const range = visibleSharedRange(chart);
-      const currentLength = range.end - range.start + 1;
-      const steps = Math.max(1, Math.abs(direction));
-      const factor = direction < 0 ? Math.pow(1 / WHEEL_ZOOM_FACTOR, steps) : Math.pow(WHEEL_ZOOM_FACTOR, steps);
-      let nextLength = clamp(Math.round(currentLength * factor), Math.min(1, count), count);
-      if (nextLength === currentLength) nextLength = clamp(currentLength + (direction < 0 ? -1 : 1), Math.min(1, count), count);
+      if (!chart.domain || !chart.fullDomain || !chart.plot) return;
       const ratio = clamp((canvasX - chart.plot.left) / chart.plot.width, 0, 1);
-      const anchor = range.start + ratio * (currentLength - 1);
-      const nextStart = Math.round(anchor - ratio * (nextLength - 1));
-      applySharedZoom(chart, nextStart, nextStart + nextLength - 1);
+      applySharedDomain(chart, TokenomicsTimeline.zoomDomain(chart.domain, chart.fullDomain, ratio, direction));
     }
 
     function consumeWheelZoomSteps(chart, deltaY) {
@@ -695,17 +669,13 @@
       return clamp(rawSteps, -3, 3);
     }
 
-    function sharedIndexFromX(chart, canvasX) {
-      const range = visibleSharedRange(chart);
-      if (!chart.plot || range.end < range.start) return 0;
-      const count = range.end - range.start + 1;
-      if (count <= 1) return range.start;
-      const ratio = clamp((canvasX - chart.plot.left) / chart.plot.width, 0, 1);
-      return clamp(Math.round(range.start + ratio * (count - 1)), range.start, range.end);
+    function sharedRatioFromX(chart, canvasX) {
+      if (!chart.plot) return 0;
+      return clamp((canvasX - chart.plot.left) / chart.plot.width, 0, 1);
     }
 
     function drawSharedSelection(ctx, chart) {
-      if (chart.dragStartX == null || chart.dragCurrentX == null || !chart.plot) return;
+      if (chart.interaction !== 'zoom' || chart.dragStartX == null || chart.dragCurrentX == null || !chart.plot) return;
       const x1 = clamp(chart.dragStartX, chart.plot.left, chart.plot.left + chart.plot.width);
       const x2 = clamp(chart.dragCurrentX, chart.plot.left, chart.plot.left + chart.plot.width);
       const left = Math.min(x1, x2);
@@ -743,8 +713,8 @@
     function drawSharedHoverGuide(ctx, node, plot, label) {
       const text = label.length > 20 ? label.slice(0, 19) + '…' : label;
       ctx.save();
-      ctx.strokeStyle = colors.accent;
-      ctx.globalAlpha = .38;
+      ctx.strokeStyle = colors.axis;
+      ctx.globalAlpha = .7;
       ctx.setLineDash([3, 4]);
       ctx.beginPath();
       ctx.moveTo(node.x, plot.top);
@@ -770,14 +740,14 @@
     function drawSharedPoint(ctx, node, { hovered = false, pinned = false } = {}) {
       ctx.save();
       if (hovered) {
-        ctx.globalAlpha = .16;
-        ctx.fillStyle = colors.accent;
+        ctx.globalAlpha = .22;
+        ctx.fillStyle = colors.axis;
         ctx.beginPath();
         ctx.arc(node.x, node.y, 11, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
-      ctx.fillStyle = hovered ? colors.accent : (pinned ? colors.fg : colors.axis);
+      ctx.fillStyle = hovered ? colors.fg : (pinned ? colors.fg : colors.axis);
       ctx.strokeStyle = colors.panel;
       ctx.lineWidth = hovered ? 3 : 1.5;
       ctx.beginPath();
@@ -805,20 +775,26 @@
         )).join('') + (config.extraLegend ? config.extraLegend(row) : '');
     }
 
-    function renderSharedMixChart(chart, rows, config) {
+    function renderSharedMixChart(chart, sourceRows, config) {
       const canvas = document.getElementById(chart.canvasId);
       if (!canvas) return;
-      const nextRows = rows || [];
+      canvas.dataset.interaction = chart.interaction;
+      canvas.title = chart.interaction === 'pan'
+        ? 'Hover to inspect the nearest interval. Drag to move through time. Wheel to zoom. Double-click to reset.'
+        : 'Hover to inspect the nearest interval. Drag to select a range. Wheel to zoom. Double-click to reset.';
+      const nextRows = sourceRows || [];
       const nextKey = sharedMixKey(nextRows, config);
       const dataChanged = nextKey !== chart.dataKey;
-      chart.rows = nextRows;
-      chart.config = config;
+      chart.sourceRows = nextRows;
+      chart.baseConfig = config;
       chart.dataKey = nextKey;
       const { ctx, width, height } = sizeCanvas(canvas);
       ctx.clearRect(0, 0, width, height);
-      if (chart.rows.length === 0) {
+      if (nextRows.length === 0) {
+        chart.rows = [];
         chart.nodes = [];
         chart.plot = null;
+        chart.config = config;
         renderSharedMixLegend(chart, null, config);
         renderSharedModelTooltip(chart, null, config, width);
         ctx.save();
@@ -828,22 +804,44 @@
         ctx.restore();
         return;
       }
-      if (dataChanged || chart.zoom.end <= chart.zoom.start || chart.zoom.end >= chart.rows.length) {
-        chart.zoom.start = 0;
-        chart.zoom.end = chart.rows.length - 1;
+      const fullDomain = config.fullDomain || TokenomicsTimeline.domainForRows(nextRows);
+      if (dataChanged || !chart.domain || !chart.fullDomain) {
+        chart.fullDomain = fullDomain;
+        chart.domain = { ...fullDomain };
         chart.hoverIndex = null;
-        if (config.pinOnClick) chart.pinnedIndex = null;
+        chart.pinnedIndex = null;
       }
 
       const margin = { top: 24, right: 24, bottom: 78, left: 78 };
       const plot = { left: margin.left, top: margin.top, width: width - margin.left - margin.right, height: height - margin.top - margin.bottom };
       chart.plot = plot;
-      const range = visibleSharedRange(chart);
-      const visible = chart.rows.slice(range.start, range.end + 1);
-      const maxValue = Math.max(1, ...visible.map(row => config.value(row)));
-      const maxScaled = Math.max(1, config.scale(maxValue));
-      const x = index => plot.left + (visible.length === 1 ? plot.width / 2 : (index / (visible.length - 1)) * plot.width);
-      const y = value => plot.top + plot.height - (config.scale(value) / maxScaled) * plot.height;
+      const pointBudget = Math.max(96, Math.min(180, Math.floor(plot.width / 7)));
+      const resolution = TokenomicsTimeline.chooseAdaptiveResolution(chart.domain.start, chart.domain.end, pointBudget);
+      const intervalMs = TokenomicsTimeline.resolutionIntervalMs(resolution);
+      const filtered = nextRows.filter(row => {
+        const time = TokenomicsTimeline.periodStart(row.name);
+        return time >= chart.domain.start && time < chart.domain.end;
+      });
+      const visible = aggregateTimelineRows(filtered, resolution);
+      const resolvedConfig = {
+        ...config,
+        intervalMs,
+        resolution,
+        summaryRow: { name: 'Total', rangeLabel: visibleDomainLabel(chart.domain, resolution), ...sumPeriodStats(filtered) },
+        yLabel: typeof config.yLabel === 'function' ? config.yLabel(resolution) : config.yLabel,
+      };
+      chart.rows = visible;
+      chart.config = resolvedConfig;
+      chart.resolution = resolution;
+      const maxValue = Math.max(1, ...visible.map(row => resolvedConfig.value(row)));
+      const maxScaled = Math.max(1, resolvedConfig.scale(maxValue));
+      const domainSpan = Math.max(TokenomicsTimeline.QUARTER_HOUR_MS, chart.domain.end - chart.domain.start);
+      const x = row => {
+        if (visible.length === 1) return plot.left + plot.width / 2;
+        const center = TokenomicsTimeline.periodStart(row.name) + intervalMs / 2;
+        return plot.left + clamp((center - chart.domain.start) / domainSpan, 0, 1) * plot.width;
+      };
+      const y = value => plot.top + plot.height - (resolvedConfig.scale(value) / maxScaled) * plot.height;
 
       ctx.save();
       ctx.font = '11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
@@ -858,7 +856,7 @@
         ctx.stroke();
         ctx.fillStyle = colors.muted;
         ctx.textAlign = 'right';
-        ctx.fillText(config.axisText(Math.max(0, (10 ** (maxScaled * tick)) - 1)), plot.left - 10, yy);
+        ctx.fillText(resolvedConfig.axisText(Math.max(0, (10 ** (maxScaled * tick)) - 1)), plot.left - 10, yy);
       }
 
       ctx.strokeStyle = colors.axis;
@@ -869,8 +867,8 @@
       ctx.stroke();
 
       for (const index of tickIndexes(visible.length, width < 760 ? 5 : 8)) {
-        const xx = x(index);
-        const rawLabel = config.xLabel(visible[index]);
+        const xx = x(visible[index]);
+        const rawLabel = resolvedConfig.xLabel(visible[index]);
         const label = rawLabel.length > 22 ? rawLabel.slice(0, 21) + '…' : rawLabel;
         ctx.strokeStyle = colors.axis;
         ctx.beginPath();
@@ -886,9 +884,9 @@
         ctx.restore();
       }
 
-      const points = visible.map((row, index) => ({ x: x(index), y: y(config.value(row)), row, globalIndex: range.start + index }));
+      const points = visible.map((row, index) => ({ x: x(row), y: y(resolvedConfig.value(row)), row, globalIndex: index }));
       ctx.strokeStyle = colors.fg;
-      ctx.globalAlpha = config.showModels ? .28 : .55;
+      ctx.globalAlpha = resolvedConfig.showModels ? .28 : .55;
       ctx.lineWidth = 2.2;
       drawCanvasCatmullRom(ctx, points, .9);
       ctx.stroke();
@@ -896,61 +894,60 @@
 
       chart.nodes = points;
       const hoverPoint = points.find(point => point.globalIndex === chart.hoverIndex) || null;
-      const pinnedPoint = config.pinOnClick ? points.find(point => point.globalIndex === chart.pinnedIndex) || null : null;
-      if (hoverPoint) drawSharedHoverGuide(ctx, hoverPoint, plot, config.xLabel(hoverPoint.row));
+      const pinnedPoint = resolvedConfig.pinOnClick ? points.find(point => point.globalIndex === chart.pinnedIndex) || null : null;
+      if (hoverPoint) drawSharedHoverGuide(ctx, hoverPoint, plot, resolvedConfig.xLabel(hoverPoint.row));
+      drawSharedModelSeries(ctx, points, resolvedConfig, y);
       for (const point of points) {
         drawSharedPoint(ctx, point, {
           hovered: point.globalIndex === chart.hoverIndex,
-          pinned: config.pinOnClick && point.globalIndex === chart.pinnedIndex,
+          pinned: resolvedConfig.pinOnClick && point.globalIndex === chart.pinnedIndex,
         });
       }
-      drawSharedModelSeries(ctx, points, config, y);
 
       ctx.fillStyle = colors.muted;
       ctx.textAlign = 'center';
       ctx.save();
       ctx.translate(18, plot.top + plot.height / 2);
       ctx.rotate(-Math.PI / 2);
-      ctx.fillText(config.yLabel, 0, 0);
+      ctx.fillText(resolvedConfig.yLabel, 0, 0);
       ctx.restore();
 
       drawSharedSelection(ctx, chart);
       const legendRow = chart.hoverIndex != null
         ? chart.rows[chart.hoverIndex]
-        : (config.pinOnClick && chart.pinnedIndex != null
+        : (resolvedConfig.pinOnClick && chart.pinnedIndex != null
           ? chart.rows[chart.pinnedIndex]
-          : (config.summaryRow || chart.rows[range.start] || visible[0]));
-      renderSharedMixLegend(chart, legendRow, config);
-      renderSharedModelTooltip(chart, hoverPoint || pinnedPoint, config, width);
+          : resolvedConfig.summaryRow);
+      renderSharedMixLegend(chart, legendRow, resolvedConfig);
+      renderSharedModelTooltip(chart, hoverPoint || pinnedPoint, resolvedConfig, width);
       ctx.restore();
     }
 
     function renderProjectDailyChart(selectedProject) {
       projectChart.selectedProject = selectedProject || null;
       projectChart.selectedProjectName = selectedProject?.name || null;
-      renderProjectResolutionControls();
+      renderTimelineDateControls('project', selectedProject?.daily || []);
       renderSharedMixChart(projectChart, projectTimelineRows(selectedProject), {
-        key: 'project-' + projectResolution + '-' + (selectedProject?.name || ''),
+        key: 'project-' + projectTimelineKey(selectedProject),
+        fullDomain: timelineRangeDomain(timelineRanges.project),
         emptyText: selectedProject
           ? (projectTimelineRequests.has(projectTimelineKey(selectedProject)) ? 'Loading project timeline...' : 'No project timeline data')
           : 'No projects',
-        yLabel: projectResolution + ' project cost (log)',
+        yLabel: resolution => 'project cost/' + resolution + ' (log)',
         value: row => row.costUsd || 0,
         valueText: row => formatUsdCompact(row.costUsd || 0),
         axisText: value => formatUsdCompact(value),
         scale: moneyScale,
         mix: costMix,
         title: row => selectedProject
-          ? selectedProject.name + ' · ' + (row.name === 'Total' ? 'Total' : periodLabel(row.name))
+          ? selectedProject.name + ' · ' + (row.name === 'Total' ? 'Total · ' + row.rangeLabel : periodLabel(row.name))
           : row.name,
         displayTitle: row => selectedProject
-          ? projectLabel(selectedProject.name) + ' · ' + (row.name === 'Total' ? 'Total' : periodLabel(row.name))
+          ? projectLabel(selectedProject.name) + ' · ' + (row.name === 'Total' ? 'Total · ' + row.rangeLabel : periodLabel(row.name))
           : row.name,
         xLabel: row => periodLabel(row.name),
-        summaryRow: selectedProject ? { ...selectedProject, name: 'Total' } : null,
         pinOnClick: true,
         showModels: true,
-        intervalMs: projectResolution === '15m' ? 900_000 : projectResolution === 'hourly' ? 3_600_000 : 86_400_000,
         extraLegend: row =>
           '<span class="mix-pill">Tariff coverage ' + esc(formatPct(tariffCoverage(row))) + '</span>' +
           '<span class="mix-pill">Cache write ' + esc(formatTokenCount(cacheWriteTokens(row))) + ' tokens / ' + esc(formatUsdCompact(cacheWriteCost(row))) + '</span>' +
@@ -979,47 +976,45 @@
 
     function renderDailyTokenChart(rows) {
       renderSharedMixChart(dailyTokenChart, rows || [], {
-        key: 'token-' + tokenResolution,
-        emptyText: 'No daily token data',
-        yLabel: 'tokens/' + tokenResolution + ' (log)',
+        key: 'token-' + globalTimelineKey(),
+        fullDomain: timelineRangeDomain(timelineRanges.token),
+        emptyText: 'No token data in this period',
+        yLabel: resolution => 'tokens/' + resolution + ' (log)',
         value: row => totalTokens(row),
         valueText: row => formatTokenCount(totalTokens(row)) + ' tokens · ' + formatUsdCompact(row.costUsd || 0),
         axisText: value => formatTokenCount(value),
         scale: tokenScale,
         mix: tokenMix,
-        title: row => periodLabel(row.name),
-        displayTitle: row => periodLabel(row.name),
+        title: row => row.name === 'Total' ? 'Total · ' + row.rangeLabel : periodLabel(row.name),
+        displayTitle: row => row.name === 'Total' ? 'Total · ' + row.rangeLabel : periodLabel(row.name),
         xLabel: row => periodLabel(row.name),
         showModels: true,
-        intervalMs: tokenResolution === '15m' ? 900_000 : tokenResolution === 'hourly' ? 3_600_000 : 86_400_000,
-      });
-    }
-
-    function renderProjectResolutionControls() {
-      document.querySelectorAll('#project-resolution-controls [data-project-resolution]').forEach(button => {
-        button.classList.toggle('active', button.dataset.projectResolution === projectResolution);
       });
     }
 
     function bindSharedMixCanvas(chart) {
       const canvas = document.getElementById(chart.canvasId);
       if (!canvas) return;
-      const nearestNode = (x, y, maxDistance = 18) => {
-        let nearest = null;
-        let nearestDistance = Infinity;
-        for (const node of chart.nodes) {
-          const distance = Math.hypot(node.x - x, node.y - y);
-          if (distance < nearestDistance) {
-            nearest = node;
-            nearestDistance = distance;
-          }
-        }
-        return nearestDistance <= maxDistance ? nearest : null;
+      const nearestNode = (x, y) => {
+        const plot = chart.plot;
+        if (!plot || x < plot.left || x > plot.left + plot.width || y < plot.top || y > plot.top + plot.height) return null;
+        return TokenomicsTimeline.nearestPointByX(chart.nodes, x);
       };
       canvas.addEventListener('mousemove', event => {
         const rect = canvas.getBoundingClientRect();
         const x = event.clientX - rect.left;
         const y = event.clientY - rect.top;
+        if (chart.dragStartX != null && chart.interaction === 'pan' && chart.dragDomain && chart.plot) {
+          chart.dragCurrentX = x;
+          chart.domain = TokenomicsTimeline.panDomain(
+            chart.dragDomain,
+            chart.fullDomain,
+            (x - chart.dragStartX) / chart.plot.width,
+          );
+          chart.hoverIndex = null;
+          rerenderSharedMixChart(chart);
+          return;
+        }
         const nearest = nearestNode(x, y);
         if (nearest) {
           chart.hoverIndex = nearest.globalIndex;
@@ -1037,6 +1032,7 @@
         chart.hoverIndex = null;
         chart.dragStartX = null;
         chart.dragCurrentX = null;
+        chart.dragDomain = null;
         rerenderSharedMixChart(chart);
       });
       canvas.addEventListener('mousedown', event => {
@@ -1045,14 +1041,17 @@
         if (!chart.plot || x < chart.plot.left || x > chart.plot.left + chart.plot.width) return;
         chart.dragStartX = x;
         chart.dragCurrentX = x;
+        chart.dragDomain = chart.domain ? { ...chart.domain } : null;
       });
       window.addEventListener('mouseup', event => {
         if (chart.dragStartX == null) return;
         const rect = canvas.getBoundingClientRect();
         const endX = event.clientX - rect.left;
         const startX = chart.dragStartX;
+        const interaction = chart.interaction;
         chart.dragStartX = null;
         chart.dragCurrentX = null;
+        chart.dragDomain = null;
         if (Math.abs(endX - startX) < 14) {
           if (chart.config?.pinOnClick) {
             const endY = event.clientY - rect.top;
@@ -1063,23 +1062,34 @@
           rerenderSharedMixChart(chart);
           return;
         }
-        if (endX > startX) {
-          applySharedZoom(chart, sharedIndexFromX(chart, startX), sharedIndexFromX(chart, endX));
+        if (interaction === 'pan') {
+          rerenderSharedMixChart(chart);
         } else {
-          zoomSharedChartAt(chart, (startX + endX) / 2, 1);
+          applySharedDomain(chart, TokenomicsTimeline.selectDomain(
+            chart.domain,
+            chart.fullDomain,
+            sharedRatioFromX(chart, startX),
+            sharedRatioFromX(chart, endX),
+          ));
         }
       });
       canvas.addEventListener('wheel', event => {
         event.preventDefault();
+        if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && chart.domain && chart.fullDomain && chart.plot) {
+          applySharedDomain(chart, TokenomicsTimeline.panDomain(
+            chart.domain,
+            chart.fullDomain,
+            -event.deltaX / chart.plot.width,
+          ));
+          return;
+        }
         const steps = consumeWheelZoomSteps(chart, event.deltaY);
         if (!steps) return;
         const rect = canvas.getBoundingClientRect();
         zoomSharedChartAt(chart, event.clientX - rect.left, steps);
       }, { passive: false });
       canvas.addEventListener('dblclick', () => {
-        chart.zoom.start = 0;
-        chart.zoom.end = Math.max(0, chart.rows.length - 1);
-        rerenderSharedMixChart(chart);
+        if (chart.fullDomain) applySharedDomain(chart, { ...chart.fullDomain });
       });
     }
 
@@ -1089,10 +1099,10 @@
     const globalTimelineRequests = new Map();
     const projectTimelineCache = new Map();
     const projectTimelineRequests = new Map();
-    let costMixMode = 'daily';
-    let tokenResolution = 'daily';
-    let projectResolution = 'hourly';
-    let dailyRangeDays = 90;
+    const timelineRanges = {
+      token: { mode: 'relative', days: 90, from: '', to: '' },
+      project: { mode: 'relative', days: 90, from: '', to: '' },
+    };
     let modelDateMode = 'relative';
     let modelRelativeDays = Infinity;
     let efficiencyModelKey = null;
@@ -1103,7 +1113,8 @@
 
     function storedDashboardMode() {
       try {
-        return localStorage.getItem('tokenomics-dashboard-mode') === 'analyst' ? 'analyst' : 'overview';
+        const mode = localStorage.getItem('tokenomics-dashboard-mode');
+        return ['overview', 'analyst', 'settings'].includes(mode) ? mode : 'overview';
       } catch {
         return 'overview';
       }
@@ -1119,44 +1130,30 @@
       if (persist) {
         try { localStorage.setItem('tokenomics-dashboard-mode', dashboardMode); } catch {}
       }
-      if (dashboardMode === 'overview' && ['projects-section', 'pricing-settings', 'efficiency-section'].includes(activeSectionTarget)) {
+      if (dashboardMode === 'overview' && ['projects-section', 'efficiency-section'].includes(activeSectionTarget)) {
         activeSectionTarget = 'overview-section';
       }
       if (cachedSummary) {
         renderRecommendations(cachedSummary);
-        renderCostMix(cachedSummary);
         renderModelAnalysis(cachedSummary);
-        requestAnimationFrame(() => {
-          renderDailyTokenChart(tokenFlowRows(cachedSummary));
-          if (dashboardMode === 'analyst') {
-            renderProjectDailyChart(selectedProjectFromSummary(cachedSummary));
-            loadSelectedProjectTimeline();
-          }
-        });
-        if (usesIntradayGlobalTimeline()) loadGlobalTimelineViews();
+        if (dashboardMode !== 'settings') {
+          requestAnimationFrame(() => {
+            renderDailyTokenChart(tokenFlowRows());
+            if (dashboardMode === 'analyst') {
+              renderProjectDailyChart(selectedProjectFromSummary(cachedSummary));
+              loadSelectedProjectTimeline();
+            }
+          });
+          loadGlobalTimelineView();
+        }
       }
       syncSectionNav();
-    }
-
-    function timelineRowsInRange(rows) {
-      if (!Number.isFinite(dailyRangeDays) || !rows?.length) return rows || [];
-      const periodTime = row => Date.parse(row.name.length === 10 ? row.name + 'T00:00:00Z' : row.name);
-      const lastDay = Date.parse(rows.at(-1).name.slice(0, 10) + 'T00:00:00Z');
-      if (!Number.isFinite(lastDay)) return rows;
-      const cutoff = lastDay - (dailyRangeDays - 1) * 86_400_000;
-      return rows.filter(row => periodTime(row) >= cutoff);
-    }
-
-    function timelineBucketName(name, resolution) {
-      if (resolution === '15m') return name;
-      if (resolution === 'hourly') return name.slice(0, 13) + ':00Z';
-      return name.slice(0, 10);
     }
 
     function aggregateTimelineRows(rows, resolution) {
       const buckets = new Map();
       for (const row of rows || []) {
-        const name = timelineBucketName(row.name, resolution);
+        const name = TokenomicsTimeline.bucketName(row.name, resolution);
         if (!buckets.has(name)) buckets.set(name, { name, ...emptyPeriodStats(), models: new Map() });
         const target = buckets.get(name);
         addPeriodStats(target, row);
@@ -1172,81 +1169,102 @@
       })).sort((a, b) => a.name.localeCompare(b.name));
     }
 
-    function dailyRowsWithModels(summary) {
-      const buckets = new Map((summary.daily || []).map(row => [row.name, { ...row, models: new Map() }]));
-      for (const group of summary.providerModelEffortDaily || []) {
-        const key = group.provider + '/' + group.model;
-        for (const row of group.daily || []) {
-          const bucket = buckets.get(row.name);
-          if (!bucket) continue;
-          if (!bucket.models.has(key)) {
-            bucket.models.set(key, { name: key, provider: group.provider, model: group.model, ...emptyPeriodStats() });
-          }
-          addPeriodStats(bucket.models.get(key), row);
-        }
+    function timelineRangeKey(range) {
+      return range.mode === 'absolute'
+        ? 'absolute:' + (range.from || '') + ':' + (range.to || '')
+        : 'relative:' + (Number.isFinite(range.days) ? range.days : 'all');
+    }
+
+    function timelineRangeQuery(range) {
+      if (range.mode === 'absolute') return { from: range.from || undefined, to: range.to || undefined };
+      return Number.isFinite(range.days) ? { days: range.days } : {};
+    }
+
+    function timelineDateBounds(rows) {
+      const dates = (rows || []).map(row => row.name.slice(0, 10)).filter(Boolean).sort();
+      return dates.length ? { min: dates[0], max: dates.at(-1) } : { min: '', max: '' };
+    }
+
+    function renderTimelineDateControls(kind, rows) {
+      const range = timelineRanges[kind];
+      const bounds = timelineDateBounds(rows);
+      range.availableFrom = bounds.min;
+      range.availableTo = bounds.max;
+      const from = document.getElementById(kind + '-date-from');
+      const to = document.getElementById(kind + '-date-to');
+      if (!range.from || (bounds.min && (range.from < bounds.min || range.from > bounds.max))) range.from = bounds.min;
+      if (!range.to || (bounds.max && (range.to < bounds.min || range.to > bounds.max))) range.to = bounds.max;
+      if (range.from && range.to && range.from > range.to) {
+        range.from = bounds.min;
+        range.to = bounds.max;
       }
-      return [...buckets.values()].map(row => ({
-        ...row,
-        models: [...row.models.values()].sort((a, b) => b.costUsd - a.costUsd || a.name.localeCompare(b.name)),
-      }));
+      for (const input of [from, to]) {
+        input.min = bounds.min;
+        input.max = bounds.max;
+      }
+      from.value = range.from;
+      to.value = range.to;
+      document.querySelectorAll('#' + kind + '-date-mode-controls [data-timeline-date-mode]').forEach(button => {
+        const active = button.dataset.timelineDateMode === range.mode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      const relative = document.getElementById(kind + '-relative-range');
+      relative.value = Number.isFinite(range.days) ? String(range.days) : 'all';
+      relative.classList.toggle('is-hidden', range.mode !== 'relative');
+      document.getElementById(kind + '-absolute-range').classList.toggle('is-hidden', range.mode !== 'absolute');
+    }
+
+    function timelineRangeDomain(range) {
+      const from = range.mode === 'absolute'
+        ? range.from
+        : (Number.isFinite(range.days) && range.availableTo
+          ? new Date(Date.parse(range.availableTo + 'T00:00:00Z') - (range.days - 1) * TokenomicsTimeline.DAY_MS).toISOString().slice(0, 10)
+          : range.availableFrom);
+      const to = range.mode === 'absolute' ? range.to : range.availableTo;
+      if (!from || !to) return null;
+      return {
+        start: Date.parse(from + 'T00:00:00Z'),
+        end: Date.parse(to + 'T00:00:00Z') + TokenomicsTimeline.DAY_MS,
+      };
+    }
+
+    function visibleDomainLabel(domain, resolution) {
+      const start = new Date(domain.start);
+      const end = new Date(domain.end - 1);
+      const options = resolution === '15m' || resolution === 'hourly'
+        ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+        : { year: 'numeric', month: 'short', day: 'numeric' };
+      return start.toLocaleString([], options) + ' - ' + end.toLocaleString([], options);
     }
 
     function globalTimelineKey() {
-      return timelineGeneration + ':' + (Number.isFinite(dailyRangeDays) ? dailyRangeDays : 'all');
+      return timelineGeneration + ':' + timelineRangeKey(timelineRanges.token);
     }
 
     function projectTimelineKey(project) {
-      return timelineGeneration + ':' + project.name;
+      return timelineGeneration + ':' + (project?.name || '<none>') + ':' + timelineRangeKey(timelineRanges.project);
     }
 
     function currentGlobalTimeline() {
       return globalTimelineCache.get(globalTimelineKey()) || [];
     }
 
-    function usesIntradayGlobalTimeline() {
-      return tokenResolution !== 'daily' || costMixMode === '15m' || costMixMode === 'hourly';
-    }
-
-    function tokenFlowRows(summary) {
-      const source = tokenResolution === 'daily' ? dailyRowsWithModels(summary) : currentGlobalTimeline();
-      return timelineRowsInRange(aggregateTimelineRows(source, tokenResolution));
+    function tokenFlowRows() {
+      return currentGlobalTimeline();
     }
 
     function projectTimelineRows(project) {
       if (!project) return [];
-      return aggregateTimelineRows(projectTimelineCache.get(projectTimelineKey(project)) || [], projectResolution);
+      return projectTimelineCache.get(projectTimelineKey(project)) || [];
     }
 
     function periodLabel(name) {
       if (name.length === 10) return name;
-      const date = new Date(name);
-      return Number.isNaN(date.getTime()) ? name : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    }
-
-    function renderDailyRangeControls() {
-      document.querySelectorAll('#daily-range-controls [data-range-days]').forEach(button => {
-        const value = button.dataset.rangeDays === 'all' ? Infinity : Number(button.dataset.rangeDays);
-        button.classList.toggle('active', value === dailyRangeDays);
-      });
-      document.querySelectorAll('#token-resolution-controls [data-token-resolution]').forEach(button => {
-        button.classList.toggle('active', button.dataset.tokenResolution === tokenResolution);
-      });
-    }
-
-    function costMixRows(summary) {
-      if (costMixMode === '15m' || costMixMode === 'hourly') {
-        return timelineRowsInRange(aggregateTimelineRows(currentGlobalTimeline(), costMixMode));
-      }
-      if (costMixMode === 'daily') {
-        return timelineRowsInRange(dailyRowsWithModels(summary));
-      }
-      return summary[costMixMode] || [];
-    }
-
-    function renderCostMixControls() {
-      document.querySelectorAll('#cost-mix-controls [data-mix-mode]').forEach(button => {
-        button.classList.toggle('active', button.dataset.mixMode === costMixMode);
-      });
+      const date = new Date(TokenomicsTimeline.periodStart(name));
+      if (Number.isNaN(date.getTime())) return name;
+      if (/^\d{4}-\d{2}$/.test(name)) return date.toLocaleDateString([], { month: 'short', year: 'numeric' });
+      return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
     function emptyPeriodStats() {
@@ -1435,27 +1453,6 @@
       renderEfficiency(summary);
     }
 
-    function renderCostMix(summary) {
-      renderCostMixControls();
-      const rows = costMixRows(summary);
-      const intervalMs = costMixMode === '15m' ? 900_000 : costMixMode === 'hourly' ? 3_600_000 : costMixMode === 'daily' ? 86_400_000 : null;
-      renderSharedMixChart(costChart, rows, {
-        key: 'cost-' + costMixMode,
-        emptyText: 'No cost data',
-        yLabel: 'cost (log)',
-        value: row => row.costUsd || 0,
-        valueText: row => formatUsdCompact(row.costUsd || 0),
-        axisText: value => formatUsdCompact(value),
-        scale: moneyScale,
-        mix: costMix,
-        title: row => periodLabel(row.name),
-        displayTitle: row => periodLabel(row.name),
-        xLabel: row => periodLabel(row.name),
-        showModels: Boolean(intervalMs),
-        intervalMs,
-      });
-    }
-
     function renderEfficiency(summary) {
       const table = document.getElementById('efficiency-table');
       const select = document.getElementById('efficiency-model-select');
@@ -1571,13 +1568,12 @@
         card('Output Tokens', segmentCardText(summary.total, 'output'), 'token-card'),
       ].join('');
       renderRecommendations(summary);
-      renderDailyRangeControls();
-      renderDailyTokenChart(tokenFlowRows(summary));
-      renderCostMix(summary);
+      renderTimelineDateControls('token', summary.daily || []);
+      renderDailyTokenChart(tokenFlowRows());
       renderModelAnalysis(summary);
       renderProjectSelector(summary);
       renderProjectDailyChart(selectedProjectFromSummary(summary));
-      if (usesIntradayGlobalTimeline()) loadGlobalTimelineViews();
+      if (dashboardMode !== 'settings') loadGlobalTimelineView();
       if (dashboardMode === 'analyst') loadSelectedProjectTimeline();
     }
 
@@ -1586,10 +1582,12 @@
     let syncEventSource = null;
     let syncAvailable = false;
 
-    async function fetchTimeline({ project, days } = {}) {
+    async function fetchTimeline({ project, days, from, to } = {}) {
       const params = new URLSearchParams();
       if (project) params.set('project', project);
       if (Number.isFinite(days)) params.set('days', String(days));
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
       const response = await fetch('/api/timeline' + (params.size ? '?' + params.toString() : ''), { cache: 'no-store' });
       if (!response.ok) throw new Error('Timeline request failed: HTTP ' + response.status);
       return response.json();
@@ -1599,9 +1597,8 @@
       const key = globalTimelineKey();
       if (globalTimelineCache.has(key)) return globalTimelineCache.get(key);
       if (globalTimelineRequests.has(key)) return globalTimelineRequests.get(key);
-      const request = fetchTimeline({ days: dailyRangeDays }).then(rows => {
-        globalTimelineCache.set(key, rows);
-        return rows;
+      const request = fetchTimeline(timelineRangeQuery(timelineRanges.token)).then(rows => {
+        return TokenomicsTimeline.rememberBounded(globalTimelineCache, key, rows);
       });
       globalTimelineRequests.set(key, request);
       try {
@@ -1611,12 +1608,11 @@
       }
     }
 
-    async function loadGlobalTimelineViews() {
+    async function loadGlobalTimelineView() {
       try {
         await ensureGlobalTimeline();
         if (!cachedSummary) return;
-        renderDailyTokenChart(tokenFlowRows(cachedSummary));
-        renderCostMix(cachedSummary);
+        renderDailyTokenChart(tokenFlowRows());
       } catch (error) {
         console.error(error);
       }
@@ -1627,9 +1623,8 @@
       const key = projectTimelineKey(project);
       if (projectTimelineCache.has(key)) return projectTimelineCache.get(key);
       if (projectTimelineRequests.has(key)) return projectTimelineRequests.get(key);
-      const request = fetchTimeline({ project: project.name }).then(rows => {
-        projectTimelineCache.set(key, rows);
-        return rows;
+      const request = fetchTimeline({ project: project.name, ...timelineRangeQuery(timelineRanges.project) }).then(rows => {
+        return TokenomicsTimeline.rememberBounded(projectTimelineCache, key, rows);
       });
       projectTimelineRequests.set(key, request);
       try {
@@ -1933,55 +1928,68 @@
       if (sync.state === 'running') watchSyncStatus();
     }
 
-    document.getElementById('cost-mix-controls').addEventListener('click', event => {
-      const mode = event.target?.dataset?.mixMode;
-      if (!mode) return;
-      costMixMode = mode;
+    function applyTimelineRangeChange(kind) {
       if (!cachedSummary) return;
-      renderCostMix(cachedSummary);
-      if (mode === '15m' || mode === 'hourly') loadGlobalTimelineViews();
-    });
-    document.getElementById('token-resolution-controls').addEventListener('click', event => {
-      const resolution = event.target?.dataset?.tokenResolution;
-      if (!['15m', 'hourly', 'daily'].includes(resolution) || resolution === tokenResolution) return;
-      tokenResolution = resolution;
-      dailyTokenChart.zoom.start = 0;
-      dailyTokenChart.zoom.end = 0;
-      dailyTokenChart.hoverIndex = null;
-      dailyTokenChart.pinnedIndex = null;
-      if (cachedSummary) {
-        renderDailyRangeControls();
-        renderDailyTokenChart(tokenFlowRows(cachedSummary));
-        if (tokenResolution !== 'daily') loadGlobalTimelineViews();
-      }
-    });
-    document.getElementById('project-resolution-controls').addEventListener('click', event => {
-      const resolution = event.target?.dataset?.projectResolution;
-      if (!['15m', 'hourly', 'daily'].includes(resolution) || resolution === projectResolution) return;
-      projectResolution = resolution;
-      projectChart.zoom.start = 0;
-      projectChart.zoom.end = 0;
-      projectChart.hoverIndex = null;
-      projectChart.pinnedIndex = null;
-      if (cachedSummary) {
-        renderProjectDailyChart(selectedProjectFromSummary(cachedSummary));
+      const project = selectedProjectFromSummary(cachedSummary);
+      if (kind === 'token') {
+        resetSharedChartDomain(dailyTokenChart);
+        renderTimelineDateControls('token', cachedSummary.daily || []);
+        renderDailyTokenChart(tokenFlowRows());
+        loadGlobalTimelineView();
+      } else {
+        resetSharedChartDomain(projectChart);
+        renderTimelineDateControls('project', project?.daily || []);
+        renderProjectDailyChart(project);
         loadSelectedProjectTimeline();
       }
-    });
-    document.getElementById('daily-range-controls').addEventListener('click', event => {
-      const raw = event.target?.dataset?.rangeDays;
-      if (!raw) return;
-      dailyRangeDays = raw === 'all' ? Infinity : Number(raw);
-      dailyTokenChart.zoom.start = 0;
-      dailyTokenChart.zoom.end = 0;
-      dailyTokenChart.hoverIndex = null;
-      if (cachedSummary) {
-        renderDailyRangeControls();
-        renderDailyTokenChart(tokenFlowRows(cachedSummary));
-        renderCostMix(cachedSummary);
-        if (usesIntradayGlobalTimeline()) loadGlobalTimelineViews();
-      }
-    });
+    }
+
+    function bindTimelineDateControls(kind) {
+      const range = timelineRanges[kind];
+      document.getElementById(kind + '-date-mode-controls').addEventListener('click', event => {
+        const mode = event.target?.dataset?.timelineDateMode;
+        if (!['relative', 'absolute'].includes(mode) || mode === range.mode) return;
+        range.mode = mode;
+        applyTimelineRangeChange(kind);
+      });
+      document.getElementById(kind + '-relative-range').addEventListener('change', event => {
+        range.days = event.target.value === 'all' ? Infinity : Number(event.target.value);
+        applyTimelineRangeChange(kind);
+      });
+      document.getElementById(kind + '-date-from').addEventListener('change', event => {
+        range.from = event.target.value;
+        if (range.to && range.from > range.to) range.to = range.from;
+        applyTimelineRangeChange(kind);
+      });
+      document.getElementById(kind + '-date-to').addEventListener('change', event => {
+        range.to = event.target.value;
+        if (range.from && range.to < range.from) range.from = range.to;
+        applyTimelineRangeChange(kind);
+      });
+    }
+
+    function bindChartInteractionControls(kind, chart) {
+      const controls = document.getElementById(kind + '-interaction-controls');
+      controls.addEventListener('click', event => {
+        const interaction = event.target?.dataset?.chartInteraction;
+        if (!['pan', 'zoom'].includes(interaction) || interaction === chart.interaction) return;
+        chart.interaction = interaction;
+        chart.dragStartX = null;
+        chart.dragCurrentX = null;
+        chart.dragDomain = null;
+        controls.querySelectorAll('[data-chart-interaction]').forEach(button => {
+          const active = button.dataset.chartInteraction === interaction;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+        rerenderSharedMixChart(chart);
+      });
+    }
+
+    bindTimelineDateControls('token');
+    bindTimelineDateControls('project');
+    bindChartInteractionControls('token', dailyTokenChart);
+    bindChartInteractionControls('project', projectChart);
     document.getElementById('model-date-mode-controls').addEventListener('click', event => {
       const mode = event.target?.dataset?.modelDateMode;
       if (!['relative', 'absolute'].includes(mode) || mode === modelDateMode) return;
@@ -2043,14 +2051,15 @@
     });
     document.getElementById('dashboard-mode-controls').addEventListener('click', event => {
       const mode = event.target?.dataset?.dashboardMode;
-      if (!['overview', 'analyst'].includes(mode) || mode === dashboardMode) return;
+      if (!['overview', 'analyst', 'settings'].includes(mode) || mode === dashboardMode) return;
       dashboardMode = mode;
       applyDashboardMode();
     });
     let activeSectionTarget = 'overview-section';
     function syncSectionNav() {
       const threshold = document.getElementById('app-header').getBoundingClientRect().height + 24;
-      const orderedTargets = ['overview-section', 'projects-section', 'models-section', 'pricing-settings', 'efficiency-section'];
+      if (dashboardMode === 'settings') return;
+      const orderedTargets = ['overview-section', 'projects-section', 'models-section', 'efficiency-section'];
       if (window.scrollY < 80) {
         activeSectionTarget = 'overview-section';
       } else {
@@ -2075,20 +2084,15 @@
     window.addEventListener('scroll', syncSectionNav, { passive: true });
     document.getElementById('project-select').addEventListener('change', () => {
       projectChart.selectedProjectName = null;
-      projectChart.hoverIndex = null;
-      projectChart.pinnedIndex = null;
-      projectChart.zoom.start = 0;
-      projectChart.zoom.end = 0;
+      resetSharedChartDomain(projectChart);
       if (cachedSummary) {
         renderProjectDailyChart(selectedProjectFromSummary(cachedSummary));
         loadSelectedProjectTimeline();
       }
     });
     bindSharedMixCanvas(dailyTokenChart);
-    bindSharedMixCanvas(costChart);
     bindSharedMixCanvas(projectChart);
-    new ResizeObserver(() => { if (cachedSummary) renderDailyTokenChart(tokenFlowRows(cachedSummary)); }).observe(document.getElementById('daily-token-canvas'));
-    new ResizeObserver(() => { if (cachedSummary) renderCostMix(cachedSummary); }).observe(document.getElementById('cost-mix-canvas'));
+    new ResizeObserver(() => { if (cachedSummary) renderDailyTokenChart(tokenFlowRows()); }).observe(document.getElementById('daily-token-canvas'));
     new ResizeObserver(() => { if (cachedSummary) renderProjectDailyChart(selectedProjectFromSummary(cachedSummary)); }).observe(document.getElementById('project-cost-canvas'));
     applyDashboardMode({ persist: false });
     initializeDashboard().catch(error => { document.body.innerHTML = '<main><section><h2>Failed to load dashboard</h2><pre>' + esc(error.stack || error.message) + '</pre></section></main>'; });

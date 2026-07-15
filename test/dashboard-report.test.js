@@ -37,6 +37,7 @@ test("dashboard serves compact 15-minute timelines separately from the summary",
   const summary = webSummary(report, defaultOptions());
   const globalTimeline = webTimeline(report);
   const recentTimeline = webTimeline(report, { days: 1 });
+  const absoluteTimeline = webTimeline(report, { from: "2026-01-01", to: "2026-01-01" });
   const projectTimeline = webTimeline(report, { project: "/tmp/project-a" });
 
   assert.equal(summary.timeline, undefined);
@@ -44,6 +45,7 @@ test("dashboard serves compact 15-minute timelines separately from the summary",
   assert.deepEqual(globalTimeline.map((row) => row.name), ["2026-01-01T12:00Z", "2026-01-01T12:15Z", "2026-01-02T12:00Z"]);
   assert.equal(globalTimeline[0].models[0].name, "openai/shared-model");
   assert.deepEqual(recentTimeline.map((row) => row.name), ["2026-01-02T12:00Z"]);
+  assert.deepEqual(absoluteTimeline.map((row) => row.name), ["2026-01-01T12:00Z", "2026-01-01T12:15Z"]);
   assert.deepEqual(projectTimeline.map((row) => row.name), ["2026-01-01T12:00Z", "2026-01-01T12:15Z"]);
   assert.equal(projectTimeline[0].models[0].name, "openai/shared-model");
   assert.deepEqual(Object.keys(globalTimeline[0]).sort(), ["cacheCreate1h", "cacheCreate30m", "cacheCreate5m", "cacheRead", "costUsd", "costsUsd", "input", "models", "name", "output", "pricedRequests", "requests"]);
@@ -149,13 +151,14 @@ test("dashboard summary exposes per-project daily buckets for the project select
   assert.equal(summary.projectDaily[1].models[1].unpricedRequests, 1);
 });
 
-test("dashboard html renders daily and cost mix with the shared canvas chart", () => {
+test("dashboard html renders Token Flow without a duplicate Cost Mix chart", () => {
   const html = dashboardHtml();
 
   assert.match(html, /id="daily-token-canvas"/);
   assert.match(html, /id="daily-token-hover-legend"/);
-  assert.match(html, /id="cost-mix-canvas"/);
-  assert.match(html, /id="cost-mix-hover-legend"/);
+  assert.doesNotMatch(html, /id="cost-mix-canvas"/);
+  assert.doesNotMatch(html, /id="cost-mix-hover-legend"/);
+  assert.doesNotMatch(html, /<h2>Cost Mix<\/h2>/);
   assert.match(html, /id="efficiency-table"/);
   assert.match(html, /Cost &amp; Resource Diagnostics/);
   assert.match(html, /id="efficiency-model-select"/);
@@ -206,7 +209,7 @@ test("dashboard html replaces sessions with a zoomable project canvas", () => {
   assert.match(html, /drawSharedSelection/);
   assert.match(html, /bindSharedMixCanvas\(projectChart\)/);
   assert.match(html, /pinnedIndex: null/);
-  assert.match(html, /summaryRow: selectedProject/);
+  assert.match(html, /summaryRow: \{ name: 'Total'/);
   assert.match(html, /pinOnClick: true/);
   assert.match(html, /row\.name === 'Total'/);
   assert.match(html, /chart\.pinnedIndex =/);
@@ -216,14 +219,8 @@ test("dashboard html replaces sessions with a zoomable project canvas", () => {
   assert.match(html, /Cache read/);
   assert.match(html, /project-model-breakdown/);
   assert.match(html, /tokens \/ /);
-  assert.match(html, /Cost Mix/);
-  assert.match(html, /data-mix-mode="daily"/);
-  assert.match(html, /data-mix-mode="weekly"/);
-  assert.match(html, /data-mix-mode="monthly"/);
-  const costMixControls = html.slice(html.indexOf('id="cost-mix-controls"'), html.indexOf('</section>', html.indexOf('id="cost-mix-controls"')));
-  const costMixRenderer = html.slice(html.indexOf("function renderCostMix"), html.indexOf("function renderEfficiency"));
-  assert.doesNotMatch(costMixControls, /data-mix-mode="models"/);
-  assert.doesNotMatch(costMixRenderer, /costMixMode === 'models'/);
+  assert.doesNotMatch(html, /costMixMode/);
+  assert.doesNotMatch(html, /renderCostMix/);
   assert.doesNotMatch(html, /<h2>Sessions<\/h2>/);
   assert.doesNotMatch(html, /fetch\('\/api\/sessions'\)/);
 });
@@ -236,9 +233,12 @@ test("dashboard exposes a database-backed pricing settings editor", () => {
   assert.match(html, /id="save-pricing"/);
   assert.match(html, /\/api\/configuration/);
   assert.match(html, /x-tokenomics-action/);
+  assert.match(html, /data-dashboard-mode="settings"/);
+  assert.match(html, /body\[data-dashboard-mode="settings"\] #pricing-settings/);
+  assert.doesNotMatch(html, /data-section-target="pricing-settings"/);
 });
 
-test("dashboard html exposes a standalone models table and relative and absolute date filters", () => {
+test("dashboard html exposes per-chart relative and absolute date filters with adaptive resolution", () => {
   const html = dashboardHtml();
 
   assert.ok(html.includes('<section id="models-section">'));
@@ -253,18 +253,37 @@ test("dashboard html exposes a standalone models table and relative and absolute
   assert.match(html, /<th>Output tokens<\/th>/);
   assert.doesNotMatch(html, /formatTokenCount\(segmentTokens\(row, key\)\)\) \+ ' tokens'/);
 
-  assert.match(html, /id="daily-range-controls"[\s\S]*data-range-days="all"/);
-  assert.match(html, /id="token-resolution-controls"[\s\S]*data-token-resolution="15m"/);
-  assert.match(html, /id="project-resolution-controls"[\s\S]*data-project-resolution="hourly"/);
-  assert.match(html, /data-mix-mode="15m"/);
+  assert.match(html, /id="token-date-mode-controls"/);
+  assert.match(html, /id="token-relative-range"/);
+  assert.match(html, /id="token-date-from"/);
+  assert.match(html, /id="token-date-to"/);
+  assert.match(html, /id="project-date-mode-controls"/);
+  assert.match(html, /id="project-relative-range"/);
+  assert.match(html, /id="project-date-from"/);
+  assert.match(html, /id="project-date-to"/);
+  assert.match(html, /id="token-interaction-controls"/);
+  assert.match(html, /id="project-interaction-controls"/);
+  assert.match(html, /data-chart-interaction="pan"/);
+  assert.match(html, /data-chart-interaction="zoom"/);
+  assert.match(html, /class="chart-help"/);
+  assert.match(html, /Hover anywhere: inspect the nearest interval/);
+  assert.match(html, /Wheel: zoom at pointer/);
+  assert.doesNotMatch(html, /token-resolution-controls/);
+  assert.doesNotMatch(html, /project-resolution-controls/);
+  assert.doesNotMatch(html, /data-mix-mode=/);
+  assert.match(html, /TokenomicsTimeline\.chooseAdaptiveResolution/);
+  assert.match(html, /TokenomicsTimeline\.zoomDomain/);
+  assert.match(html, /TokenomicsTimeline\.panDomain/);
+  assert.match(html, /TokenomicsTimeline\.nearestPointByX/);
+  assert.match(html, /createCategoricalColorScale/);
   assert.match(html, /aggregateTimelineRows/);
-  assert.match(html, /Math\.min\(1, count\)/);
+  assert.match(html, /src="\/timeline\.js"/);
   assert.match(html, /drawSharedModelSeries/);
   assert.match(html, /className = 'chart-tooltip'/);
   assert.match(html, /modelColor/);
   assert.match(html, /currentTime - previousTime > config\.intervalMs/);
   const dateInputs = html.match(/<input\b[^>]*type=["']date["'][^>]*>/g) || [];
-  assert.ok(dateInputs.length >= 2, "expected absolute start and end date controls");
+  assert.ok(dateInputs.length >= 6, "expected absolute start and end controls for both charts and the model table");
 });
 
 test("Daily Token Flow value text includes total tokens and total USD cost", () => {
@@ -293,11 +312,11 @@ test("dashboard html exposes the operational overview layout", () => {
   assert.match(html, /id="models-section"/);
   assert.match(html, /id="projects-section"/);
   assert.match(html, /id="efficiency-section"/);
-  assert.match(html, /id="daily-range-controls"/);
-  assert.match(html, /data-range-days="90"/);
+  assert.match(html, /id="token-date-mode-controls"/);
+  assert.match(html, /id="project-date-mode-controls"/);
   assert.match(html, /id="model-ranking"/);
   assert.match(html, /renderModelRanking/);
-  assert.match(html, /dailyRangeDays/);
+  assert.match(html, /timelineRanges/);
   assert.match(html, /syncSectionNav/);
   assert.match(html, /data-dashboard-mode="overview"/);
   assert.match(html, /data-dashboard-mode="analyst"/);

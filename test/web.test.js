@@ -54,12 +54,28 @@ test("web server serves stored SQLite summary and sessions", async () => {
     assert.equal(summary.topModels[0].name, "gpt-5.4-mini");
     assert.equal(summary.timeline, undefined);
 
+    const timelineJavascript = await fetch(`${base}/timeline.js`);
+    assert.equal(timelineJavascript.status, 200);
+    assert.match(timelineJavascript.headers.get("content-type"), /text\/javascript/);
+    assert.match(await timelineJavascript.text(), /chooseAdaptiveResolution/);
+
     const timeline = await fetch(`${base}/api/timeline?days=1`).then((response) => response.json());
     assert.equal(timeline.length, 1);
     assert.equal(timeline[0].name, "2026-07-05T00:00Z");
     const projectTimeline = await fetch(`${base}/api/timeline?project=${encodeURIComponent("/tmp/project-web")}`).then((response) => response.json());
     assert.equal(projectTimeline.length, 1);
     assert.equal(projectTimeline[0].output, 1_000_000);
+
+    const absoluteTimeline = await fetch(`${base}/api/timeline?from=2026-07-05&to=2026-07-05`).then((response) => response.json());
+    assert.equal(absoluteTimeline.length, 1);
+    const reversedRange = await fetch(`${base}/api/timeline?from=2026-07-06&to=2026-07-05`);
+    assert.equal(reversedRange.status, 400);
+    const mixedRange = await fetch(`${base}/api/timeline?days=1&from=2026-07-05`);
+    assert.equal(mixedRange.status, 400);
+    const invalidRange = await fetch(`${base}/api/timeline?from=2026-02-30`);
+    assert.equal(invalidRange.status, 400);
+    const malformedCalendarRange = await fetch(`${base}/api/timeline?from=2026-99-99`);
+    assert.equal(malformedCalendarRange.status, 400);
 
     const sessions = await fetch(`${base}/api/sessions`).then((response) => response.json());
     assert.equal(sessions.length, 1);
