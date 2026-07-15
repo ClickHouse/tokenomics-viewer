@@ -1,426 +1,434 @@
 # Tokenomics Viewer
 
-Tokenomics Viewer scans local Codex and Claude Code session logs, normalizes
-token usage, estimates costs from a database-backed pricing catalog, and reports the results
-as text, JSON, SQLite-backed data, or a local web dashboard.
+Local-first cost and token analytics for Codex and Claude Code, powered by
+ClickHouse. Tokenomics reads local session logs, removes replayed parent traces
+from forked Codex sessions, normalizes usage, and estimates costs from an
+editable pricing catalog.
 
-The tool is local-first. It reads files from your machine and does not upload
-logs or reports anywhere.
+The dashboard and database run on your machine. Tokenomics does not upload
+session logs or reports.
 
-## One-line setup
+## Quick Start
 
-On macOS or Linux, install or update Tokenomics Viewer and start it with:
+Install or update Tokenomics on macOS or Linux, run the initial sync, and open
+the dashboard:
 
 ```bash
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/skuznetsov/tokenomics-viewer/main/install.sh)"
 ```
 
-The installer does not use `sudo`. It installs versioned application files in
-`~/.local/share/tokenomics-viewer`, creates `tokenomics`, `tokenomics-viewer`,
-and `tokenomics-launch` commands in `~/.local/bin`, and then starts the
-launcher. If Node.js 26 or newer is unavailable, it installs a private Node.js
-26 runtime after verifying the archive against the official Node.js SHA-256
-manifest.
+Automatic setup supports arm64 and x86-64 macOS or Linux. It expects the
+standard `curl`, `tar`, `sed`, `awk`, and `find` tools; installing the private
+Node.js runtime also requires `shasum` or `sha256sum` for verification.
 
-ClickHouse is the launcher's default backend. The launcher installs it when
-needed, runs the initial sync, starts the dashboard, and opens it in the default
-browser without an interactive database-choice flow. SQLite remains available
-as an explicit opt-out, and its data is kept across application updates at:
+The installer does not use `sudo` or install npm packages. On the first run it:
 
-```text
-~/.local/share/tokenomics-viewer/tokenomics.sqlite
-```
+1. Installs Tokenomics under `~/.local/share/tokenomics-viewer`.
+2. Adds launchers under `~/.local/bin`.
+3. Installs a private Node.js 26 runtime when the system Node.js is too old.
+4. Installs `clickhousectl`, selects stable ClickHouse, and starts the named
+   `tokenomics` server.
+5. Imports local Codex and Claude Code sessions into ClickHouse.
+6. Starts the dashboard on a loopback address and opens it in your browser.
 
-Run the same one-line command again to update. To install and opt out of
-ClickHouse in one command, pass the launcher flag through the shell:
+Subsequent launches are one command:
 
 ```bash
-/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/skuznetsov/tokenomics-viewer/main/install.sh)" -- --sqlite
+tokenomics-launch
 ```
 
-To install without starting the dashboard, use:
+Run the one-line installer again to update Tokenomics. To install or update
+without launching the application:
 
 ```bash
 TOKENOMICS_NO_LAUNCH=1 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/skuznetsov/tokenomics-viewer/main/install.sh)"
 ```
 
-If `~/.local/bin` is not already on `PATH`, the installer prints the exact
-`export` command to add it. It does not modify shell startup files.
+If `~/.local/bin` is not on `PATH`, the installer prints the exact `export`
+command to use. It does not edit shell startup files.
 
-## Requirements
+## What You Get
 
-- Node.js 26 or newer
-- No npm dependencies
+- Cost, request, and input/cache/output token totals with compact units.
+- Adaptive Token Flow and Project Cost charts from daily down to 15-minute
+  resolution, with pointer-centered wheel zoom, drag pan, range selection, and
+  absolute or relative dates.
+- Model-colored points and lines, gaps when a model was not used, and interval
+  tooltips with cost, token, and share breakdowns.
+- Model and effort tables with input/cache/output costs, tokens, and shares.
+- `Overview` for a compact report and `Analyst` for project, model, effort, and
+  resource diagnostics.
+- Deterministic recommended actions with evidence, confidence, and caveats.
+- An editable, database-backed provider and model pricing catalog.
+- Codex rate-limit consumption summaries when snapshots are present.
 
-`node:sqlite` is used for the SQLite-backed sync and web dashboard modes.
-ClickHouse mode uses the ClickHouse HTTP interface and still needs no npm
-dependencies.
+Cost estimates are analytical aids, not billing statements. Subscription usage,
+negotiated rates, batch pricing, and unrecognized models can differ from the
+standard API-equivalent catalog.
 
-## Local ClickHouse with clickhousectl
+## Common Commands
 
-[`clickhousectl`](https://clickhouse.com/blog/getting-started-clickhousectl) is
-the official ClickHouse CLI for installing versions and managing isolated local
-servers. The installer also creates the shorter `chctl` command used below.
-
-Install it on macOS or Linux:
+Start with ClickHouse, sync changed sessions, and open the browser:
 
 ```bash
-curl -fsSL https://clickhouse.com/cli | sh
+tokenomics-launch
 ```
 
-The binary is installed under `~/.local/bin`. If your shell cannot find it, add
-that directory to `PATH` and restart the shell:
+Start without opening a browser, or prefer another dashboard port:
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-clickhousectl --version
+tokenomics-launch --no-open
+tokenomics-launch --port 8790
+```
+
+Limit discovery to one source. Tokenomics options follow `--`:
+
+```bash
+tokenomics-launch -- --source codex
+tokenomics-launch -- --source claude
+```
+
+Serve the current ClickHouse database without scanning source files:
+
+```bash
+tokenomics --db-engine clickhouse --webserver --no-sync
+```
+
+Print a JSON report from the current ClickHouse database:
+
+```bash
+tokenomics --db-engine clickhouse --json
+```
+
+Scan explicit files or archives directly and print an in-memory report:
+
+```bash
+tokenomics /path/to/session.jsonl /path/to/archived_sessions.zip
+tokenomics --json --output report.json /path/to/sessions
+```
+
+When running from a source checkout, replace `tokenomics-launch` with
+`./launcher.js` and `tokenomics` with `./app.js`.
+
+## ClickHouse
+
+ClickHouse is the default and recommended database. The launcher normally
+installs and manages it, so manual setup is not required.
+
+The local defaults are:
+
+| Setting | Value |
+| --- | --- |
+| Server name | `tokenomics` |
+| HTTP endpoint | `http://127.0.0.1:8123` |
+| Native TCP port | `9000` |
+| Database | `tokenomics` |
+
+### Check and Control the Local Server
+
+```bash
 chctl --version
-```
-
-Download the current stable ClickHouse release and make it the local default:
-
-```bash
-chctl local use stable
-chctl local which
-```
-
-From the Tokenomics Viewer repository, start a persistent named server on the
-HTTP port expected by the application:
-
-```bash
-chctl local server start --name tokenomics --http-port 8123 --tcp-port 9000
 chctl local server list
-curl http://127.0.0.1:8123/ping
-```
-
-The server runs in the background and stores its data under
-`.clickhouse/servers/tokenomics/`. Connect with the bundled ClickHouse client:
-
-```bash
+curl -fsS http://127.0.0.1:8123/ping
 chctl local client --name tokenomics --query "SELECT version()"
 ```
 
-Stop, restart, or permanently remove the local instance with:
-
-```bash
-chctl local server stop tokenomics
-chctl local server start --name tokenomics
-chctl local server stop tokenomics
-chctl local server remove tokenomics
-```
-
-If port `8123` is already occupied, omit `--http-port` and inspect the assigned
-port with `chctl local server list`, then pass it to Tokenomics Viewer:
-
-```bash
-chctl local server start --name tokenomics-alt
-./app.js --sync --db-engine clickhouse \
-  --clickhouse-url http://127.0.0.1:ASSIGNED_HTTP_PORT
-```
-
-## Usage
-
-### Launcher
-
-For the default local workflow, run:
-
-```bash
-./launcher.js
-```
-
-The launcher uses ClickHouse by default, installs `clickhousectl` when needed,
-starts the named local server, runs Tokenomics with sync enabled, waits for the
-dashboard to become ready, and opens the default browser. It reuses an existing
-dashboard only when that process reports the requested backend. Older
-`~/.config/tokenomics-viewer/launcher.json` choice files are ignored.
-
-Useful launcher controls:
-
-```bash
-./launcher.js --sqlite              # opt out of ClickHouse for this launch
-./launcher.js --no-clickhouse       # explicit alias for --sqlite
-./launcher.js --clickhouse          # explicit ClickHouse (already the default)
-./launcher.js --no-open             # do not open a browser
-./launcher.js -- --source codex     # pass Tokenomics options after --
-```
-
-Unless SQLite is explicitly selected, the launcher downloads and executes the
-official `https://clickhouse.com/cli` installer, selects the stable local
-release, and starts the named `tokenomics` server on HTTP `8123` and TCP `9000`.
-Automatic installation is supported on macOS and Linux.
-
-Run an in-memory text report over the default local roots:
-
-```bash
-./app.js
-```
-
-Write JSON:
-
-```bash
-./app.js --json --output report.json
-```
-
-Scan explicit paths:
-
-```bash
-./app.js /path/to/session.jsonl /path/to/archived_sessions.zip
-```
-
-Build or update a SQLite database:
-
-```bash
-./app.js --sync --db tokenomics.sqlite
-```
-
-Serve the browser dashboard:
-
-```bash
-./app.js --webserver --db tokenomics.sqlite
-```
-
-Open the printed local URL, usually:
-
-```text
-http://127.0.0.1:8787
-```
-
-Serve an existing database without rescanning logs:
-
-```bash
-./app.js --webserver --db tokenomics.sqlite --no-sync
-```
-
-Use a local ClickHouse server instead of SQLite:
+Start or stop the named server:
 
 ```bash
 chctl local server start --name tokenomics --http-port 8123 --tcp-port 9000
-./app.js --sync --webserver --db-engine clickhouse
+chctl local server stop tokenomics
 ```
 
-By default ClickHouse mode connects to `http://127.0.0.1:8123` and uses the
-`tokenomics` database. Override with `--clickhouse-url`,
-`--clickhouse-database`, `--clickhouse-user`, and `--clickhouse-password`, or
-the matching `TOKENOMICS_CLICKHOUSE_*` environment variables.
+`clickhousectl` stores local server state under `.clickhouse/` in the directory
+where it is run. Run control commands from the same directory where you started
+`tokenomics-launch`. If `chctl local server list` is unexpectedly empty, check
+your current directory first.
 
-ClickHouse inserts use large bounded batches by default: up to 100,000 rows or
-32 MiB per JSONEachRow request, whichever comes first. Tune that balance with
-`--clickhouse-insert-batch-rows` and `--clickhouse-insert-batch-bytes` when the
-server can absorb larger inserts or the client needs a lower memory ceiling.
-
-New ClickHouse tables are created with per-column codecs: ZSTD for text and
-stored JSON, Delta+ZSTD for counters and timestamps, Gorilla+ZSTD for floats,
-and T64+ZSTD for compact flags. Compatible schema additions are applied in
-place. To discard and rebuild all Tokenomics-owned ClickHouse tables, use:
+To install `clickhousectl` manually:
 
 ```bash
-./app.js --sync --db-engine clickhouse --clickhouse-reset
+curl -fsSL https://clickhouse.com/cli | sh
+export PATH="$HOME/.local/bin:$PATH"
+chctl local use stable
 ```
 
-To render a report from an already-synced ClickHouse database without rescanning
-logs:
+See the official
+[`clickhousectl` getting-started guide](https://clickhouse.com/blog/getting-started-clickhousectl)
+for version and local-server management details.
+
+### Use an Existing ClickHouse Server
+
+The low-level CLI accepts an alternate endpoint, database, and credentials:
 
 ```bash
-./app.js --db-engine clickhouse --json
+tokenomics --sync --webserver --db-engine clickhouse \
+  --clickhouse-url http://127.0.0.1:8123 \
+  --clickhouse-database tokenomics \
+  --clickhouse-user default
 ```
 
-## Inputs
+Credentials can also be supplied through `TOKENOMICS_CLICKHOUSE_USER` and
+`TOKENOMICS_CLICKHOUSE_PASSWORD`. The endpoint and database have matching
+`TOKENOMICS_CLICKHOUSE_URL` and `TOKENOMICS_CLICKHOUSE_DATABASE` variables.
+Prefer environment variables to command-line passwords so credentials do not
+appear in shell history or process listings.
 
-When no paths are passed, Tokenomics Viewer scans:
+### Batching, Compression, and Reset
+
+ClickHouse inserts are bounded by both row count and request size: 100,000 rows
+or 32 MiB by default, whichever is reached first. Tune memory and server load
+with:
+
+```bash
+tokenomics --sync --db-engine clickhouse \
+  --clickhouse-insert-batch-rows 50000 \
+  --clickhouse-insert-batch-bytes 16MiB
+```
+
+Tokenomics uses ZSTD-based per-column codecs, plus Delta, Gorilla, or T64 where
+appropriate for timestamps, counters, floats, and flags.
+
+As a last resort, discard and rebuild every Tokenomics-owned ClickHouse table:
+
+```bash
+tokenomics --sync --db-engine clickhouse --clickhouse-reset
+```
+
+This is destructive for the selected Tokenomics database. Normal upgrades,
+pricing changes, and incremental syncs do not require a reset.
+
+## How Sync Works
+
+With no explicit paths, Tokenomics discovers:
 
 - `~/.claude/projects/**/*.jsonl`
 - `${CODEX_HOME:-~/.codex}/sessions/**/*.{jsonl,jsonl.zst}`
 - `${CODEX_HOME:-~/.codex}/archived_sessions/**/*.{jsonl,jsonl.zst,zip}`
 
-Use `--source claude`, `--source codex`, `--archives`, and `--no-archives` to
-control default discovery.
+Use `--source claude`, `--source codex`, `--archives`, or `--no-archives` to
+control default discovery. ZIP and Zstandard-compressed rollouts are read
+directly without extracting them. If both `.jsonl` and `.jsonl.zst` versions
+exist during a compression transition, the plain file is read once.
 
-ZIP archives and Codex Zstd-compressed rollouts are read directly without
-extracting entries to disk. When both `.jsonl` and `.jsonl.zst` representations
-exist during a Codex compression transition, Tokenomics reads only the plain
-file.
+Sync is incremental by source fingerprint. Unchanged sessions are skipped;
+changed files or archive entries replace their previous normalized data. Codex
+fork metadata and replay traces are used to avoid counting inherited parent
+history again in subagent sessions.
 
-## Reports
+ClickHouse source versions are immutable. A sync stages changed sources and a
+complete source manifest, then publishes one global generation marker last.
+Reports pin that generation, so a failed multi-source sync leaves the previous
+complete report visible instead of exposing a partial import.
 
-The report includes:
+Pricing revisions are deliberately excluded from source fingerprints. Editing
+a rate or adding a model updates normalized database costs without reopening
+JSONL, ZIP, or Zstandard source files.
 
-- totals by provider, model, project, day, week, month, year
-- per-session processing metrics
-- input, cache-create, cache-read, output, and reasoning-output token counts
-- cost breakdown by token category
-- Codex rate-limit burn summaries when rate-limit snapshots are present
-- unpriced model buckets when a model is missing from the static pricing table
+## Dashboard
 
-## SQLite Mode
+The dashboard has three modes:
 
-`--sync --db <path>` stores normalized rows in SQLite:
+- `Overview` shows headline totals, recommendations, Token Flow, and a compact
+  model ranking.
+- `Analyst` adds per-project timelines, the full model/effort table, and Cost &
+  Resource Diagnostics.
+- `Settings` edits pricing and analytics configuration.
 
-- `sources`
-- `sessions`
-- `usage_events`
-- `rate_limit_samples`
+Token Flow and Project Cost load compact timeline buckets on demand. Hover
+anywhere in a chart to inspect the nearest interval; use the wheel to zoom at
+the pointer, drag in `Pan` mode to move through history, drag in `Zoom` mode to
+select a range, and double-click to reset. Relative and absolute date controls
+bound the data before interactive zooming.
 
-Sync is incremental by source fingerprint. If a JSONL file or ZIP entry changes,
-that source is replaced in a transaction instead of duplicated.
+The dashboard exposes these local endpoints:
 
-Generated SQLite files and reports are ignored by `.gitignore`.
+- `/api/summary` for dashboard aggregates.
+- `/api/timeline` for range- and project-filtered timeline data.
+- `/api/report` for the complete normalized report.
+- `/api/sync` and `/api/sync/events` for protected sync and live progress.
 
-## ClickHouse Mode
+The server binds to `127.0.0.1` by default. Dashboard-triggered sync and pricing
+changes are enabled only on loopback bindings. A server exposed through
+`0.0.0.0` or a LAN address is intentionally read-only because Tokenomics does
+not provide remote-user authentication.
 
-`--db-engine clickhouse` stores the same normalized rows in ClickHouse tables:
-
-- `sources`
-- `sessions`
-- `usage_events`
-- `rate_limit_samples`
-
-Each source version is immutable. A sync stages changed sources and a complete
-source manifest, then publishes one global generation marker last. Reports pin
-that generation for every aggregation query, so a failed multi-source sync
-leaves the previous complete report visible instead of exposing a partial mix.
-Source fingerprints cover source identity and analytics derivation only. Pricing
-revisions are deliberately excluded: changing a rate must not read or reimport
-session files. Legacy fingerprints containing pricing fields are compared using
-the same canonical form, so this migration does not trigger a one-time full
-reimport. Database schema versioning remains a separate concern.
-
-The web dashboard reuses the report produced by startup sync instead of
-rebuilding it for every API request. In ClickHouse mode, summary buckets are
-computed with ClickHouse aggregations rather than streaming all usage rows into
-Node.js. Sync streams normalized rows into ClickHouse in bounded chunks, so large
-session files do not need to fit in the JavaScript heap. `--clickhouse-reset`
-drops and recreates all Tokenomics-owned tables before sync; normal upgrades do
-not require a reset.
-
-## Web Dashboard
-
-`--webserver` serves:
-
-- `/` dashboard HTML
-- `/api/summary`
-- `/api/timeline` compact 15-minute data loaded on demand for a range or project
-- `/api/sessions`
-- `/api/report`
-- `/api/sync` sync status and protected start action
-- `/api/sync/events` live sync progress over server-sent events
-
-The dashboard shows canvas-based token-flow, cost-mix, and per-project cost
-charts at 15-minute, hourly, and daily resolution; Cost Mix also retains weekly
-and monthly views. Intraday rows are loaded separately from the summary and a
-project timeline is fetched only for the selected project. Accumulated
-mouse-wheel zoom follows the pointer, drag selects a range, and zoom can reach a
-single 15-minute bucket. Small trackpad deltas are accumulated before changing
-the visible range.
-
-Each model is drawn as a stable-color point and Catmull-Rom line. A missing model
-interval creates a visible break instead of implying zero or interpolated use.
-Hover labels keep aggregate input/cache/output in the header and show each
-model's `cost / tokens / percent` for the selected interval. Project intervals
-can be pinned by click.
-
-Analyst mode includes `Cost & Resource Diagnostics`. It reuses the Models date
-range and compares effort rows only within one selected provider/model cohort.
-The table reports usage-event count, tariff coverage, estimated spend, covered
-input/cache/output per event, amortized total spend per output, output tariff,
-cache-read share, and reasoning share. `Tariff coverage` means that the local
-pricing catalog recognized an event; it does not prove that the event was billed.
-`Usage event` is also deliberately not labeled as a user request or completed
-task. Without outcome or quality data the section remains descriptive and does
-not rank effort levels by efficiency.
-
-The header switches between `Overview` and `Analyst` modes. Overview keeps the
-model ranking to ten rows and hides project/diagnostics detail. Analyst exposes
-the full stored model list and the detailed project and diagnostics sections.
-Both modes show deterministic recommendation findings generated from the same
-report. Recommendations include evidence, confidence, a concrete action, and a
-caveat; unpriced traffic is not assumed to be billable because subscription or
-intentionally non-billable models may have no API tariff.
-
-The server binds to `127.0.0.1` by default. Use `--host` only if you understand
-that reports can contain local file paths, project names, usage patterns, and
-estimated spending.
-
-The dashboard Sync button is enabled only when the webserver is bound to a
-loopback host. Bindings such as `0.0.0.0` and LAN addresses remain read-only:
-reports are served, but sync mutations are rejected. This is intentional;
-the custom action header prevents browser CSRF but is not remote-user
-authentication.
-
-## Pricing
+## Pricing and Diagnostics
 
 The first database open seeds a packaged pricing catalog from
-`lib/core/pricing.js`. After that, the active catalog and analytics settings are
-stored in the selected SQLite or ClickHouse database. Treat estimates as audit
-aids, not billing truth. Verify current provider pricing before relying on the
-numbers for financial decisions.
+`lib/core/pricing.js`. The active catalog and analytics settings then live in
+the selected database.
 
-Open the dashboard in **Analyst** mode and use **Pricing & Analytics Settings**
-to:
+In `Settings`, you can:
 
-- inspect and edit per-million-token input, cache-write, cache-read, and output
-  rates;
-- add providers and models using a provider slug and model id;
+- edit per-million-token input, cache-write, cache-read, and output rates;
+- add providers and models;
 - choose exact, prefix, or dated-snapshot model matching;
-- set OpenAI short/long context selection and a global rate multiplier.
+- select OpenAI short/long context pricing;
+- apply a global rate multiplier.
 
-Configuration saves use an optimistic revision and are allowed only on a
-loopback-bound dashboard. Saving applies the catalog immediately from normalized
-database rows; it never rereads JSONL, ZIP, or Zstandard session sources. SQLite
-derives costs from the active catalog while reading normalized rows. ClickHouse
-writes a compact revisioned cost overlay with one `INSERT SELECT`, then publishes
-the configuration marker last. If repricing fails, the previous configuration
-and costs remain visible.
+Saves use optimistic revisions. SQLite derives new costs from normalized rows;
+ClickHouse creates a compact revisioned cost overlay with one `INSERT SELECT`
+and publishes the configuration marker last. Neither backend rereads session
+files after a pricing-only change.
 
-Custom providers are priced when an ingested record identifies the same provider
-slug. Adding a catalog row cannot infer a provider that is absent from the source
-log. `standard` means the displayed values are standard API-equivalent estimates;
-switch the basis to `custom` when entering negotiated, batch, subscription, or
-otherwise non-standard rates.
+Custom providers can be priced only when an ingested record contains the same
+provider slug. Adding a catalog row cannot infer provider identity missing from
+the source log. Set the pricing basis to `custom` for negotiated, batch,
+subscription, or other non-standard rates.
 
-GPT-5.6 Sol, Terra, and Luna use separate input, 30-minute cache-write, and
-cache-read prices. Codex logs are interpreted conservatively: the legacy
-`input_tokens` plus `cached_input_tokens` format treats the cached amount as a
-subset of input (read only), while the explicit
-`cache_creation_input_tokens` plus `cache_read_input_tokens` format records a
-30-minute cache write separately. A legacy log cannot prove a cache-write
-quantity, so the estimate leaves that bucket at zero instead of inferring it
-from input. Source: <https://developers.openai.com/api/docs/models/gpt-5.6-sol>.
+Diagnostics compare effort levels only inside one provider/model cohort and
+within the selected model date range. They report usage-event count, tariff
+coverage, estimated spend, covered input/cache/output per event, amortized spend
+per output token, cache-read share, and reasoning share. A usage event is not
+necessarily a user request or completed task, and tariff coverage means only
+that the local catalog recognized an event. Without outcome or quality data,
+Tokenomics does not rank effort levels as objectively better or worse.
+
+GPT-5.6 Sol, Terra, and Luna support separate input, cache-write, cache-read, and
+output rates. Legacy Codex `input_tokens` plus `cached_input_tokens` records are
+treated as total input with cached input as a read subset. Explicit
+`cache_creation_input_tokens` plus `cache_read_input_tokens` records preserve
+cache writes separately. Tokenomics does not invent cache-write volume for
+legacy records that cannot prove it.
 
 The proposed compressed session store and project-scoped session viewer are not
-implemented in this slice. Their admitted safety boundary is documented in
+implemented. Their intended safety boundary is documented in
 [`docs/PRICING_CONFIGURATION_FRONTIER.md`](docs/PRICING_CONFIGURATION_FRONTIER.md).
 
-## Privacy
+## Troubleshooting
 
-Session logs, generated reports, and SQLite databases can contain sensitive
-metadata such as local paths, project names, timestamps, model names, and usage
-patterns. Do not publish generated output unless you have reviewed it.
+### The First Sync Takes a Long Time
+
+The initial import must parse all discovered sessions and archives. Watch the
+terminal for per-session progress. Later syncs use source fingerprints and
+should skip unchanged data. Large ClickHouse inserts are streamed in bounded
+batches, so increasing the Node.js heap should not be the first response to a
+slow or failed import.
+
+For a smaller diagnostic run:
+
+```bash
+tokenomics --sync --db-engine clickhouse --source codex --limit-files 20
+```
+
+### `chctl` Is Not Found
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+chctl --version
+```
+
+Add that export to your shell startup file if needed. The Tokenomics installer
+prints a shell-specific suggestion but does not modify the file itself.
+
+### ClickHouse Is Not Reachable
+
+```bash
+chctl local server list
+curl -fsS http://127.0.0.1:8123/ping
+```
+
+Run both commands from the launch directory because local `clickhousectl`
+servers are directory-scoped. If port `8123` belongs to another service, either
+stop that service or run Tokenomics directly against another ClickHouse HTTP
+endpoint with `--clickhouse-url`.
+
+### The Dashboard Port Is Busy
+
+The launcher tries the preferred port and the next 20 ports. Set another
+starting point explicitly:
+
+```bash
+tokenomics-launch --port 8790
+```
+
+### An Installer Fails with HTML or `<!doctype`
+
+Run the current one-line installer again. The launcher validates the
+`clickhousectl` download before executing it and rejects HTML/error responses
+instead of passing them to `/bin/sh`.
+
+### Start Without Rescanning
+
+```bash
+tokenomics --db-engine clickhouse --webserver --no-sync
+```
+
+## SQLite Fallback
+
+SQLite remains available for portability, small datasets, or environments
+where running ClickHouse is not practical. ClickHouse is the tested default and
+recommended path for large session histories.
+
+Use SQLite for one launch:
+
+```bash
+tokenomics-launch --sqlite
+```
+
+Install or update and immediately opt out of ClickHouse:
+
+```bash
+/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/skuznetsov/tokenomics-viewer/main/install.sh)" -- --sqlite
+```
+
+Or manage the SQLite database directly:
+
+```bash
+tokenomics --sync --webserver --db-engine sqlite --db tokenomics.sqlite
+tokenomics --webserver --no-sync --db-engine sqlite --db tokenomics.sqlite
+```
+
+Installed-launcher SQLite data is kept across application updates at
+`~/.local/share/tokenomics-viewer/tokenomics.sqlite`.
+
+## Privacy and Data
+
+Session logs, reports, and databases can reveal local paths, project names,
+timestamps, model choices, usage patterns, and estimated spending. Keep the
+dashboard on loopback and review generated output before publishing it.
+
+The installer writes application versions beneath
+`~/.local/share/tokenomics-viewer` and launchers beneath `~/.local/bin`. Local
+ClickHouse server data is managed by `clickhousectl` beneath the launch
+directory's `.clickhouse/` tree. SQLite files and generated reports in the
+repository are ignored by `.gitignore`.
 
 ## Development
 
-`app.js` is the executable composition root. Implementation is split by
-responsibility:
+Requirements:
 
-- `lib/core/` contains report state, usage normalization, pricing, aggregation,
-  and rate-limit calculations.
-- `lib/ingest/` contains the JSONL parser, fork/replay handling, source
-  discovery, and ZIP reader.
-- `lib/storage/` contains independent SQLite and ClickHouse backends plus their
-  shared facade.
-- `lib/report/`, `lib/web-server.js`, and `lib/cli.js` contain presentation,
-  HTTP, and command-line boundaries.
-- `test/*.test.js` mirrors those domains; shared fixture builders live under
-  `test/support/`.
+- Node.js 26 or newer
+- No npm dependencies
 
-Run tests:
+Run from a source checkout:
+
+```bash
+./launcher.js
+./app.js --help
+```
+
+Run the complete test suite and syntax checks:
 
 ```bash
 node --test
-```
-
-Check syntax:
-
-```bash
 node --check app.js
+node --check launcher.js
 ```
+
+The implementation is organized by responsibility:
+
+- `lib/core/` contains report state, usage normalization, pricing,
+  aggregation, and rate-limit calculations.
+- `lib/ingest/` contains source discovery, JSONL parsing, archive readers, and
+  fork/replay handling.
+- `lib/storage/` contains the SQLite and ClickHouse backends and shared facade.
+- `lib/report/`, `lib/web-server.js`, and `lib/cli.js` contain presentation,
+  HTTP, and command-line boundaries.
+- `test/*.test.js` mirrors those domains; shared fixtures live in
+  `test/support/`.
+
+## License
+
+ISC. See [`LICENSE`](LICENSE).
