@@ -17,6 +17,34 @@ test("dashboard summary keeps daily buckets chronological for time-series charts
   assert.deepEqual(summary.daily.map((row) => row.name), ["2026-01-01", "2026-01-02", "2026-01-03"]);
 });
 
+test("dashboard summary exposes the current local calendar month", () => {
+  const report = newReport();
+  report.monthly["2026-06"] = statsFixture({ costUsd: 12 });
+  report.monthly["2026-07"] = statsFixture({
+    requests: 9,
+    input: 100,
+    cacheRead: 200,
+    output: 30,
+    costUsd: 34.5,
+  });
+
+  const summary = webSummary(report, defaultOptions({ now: new Date(2026, 6, 17, 12, 0, 0) }));
+
+  assert.equal(summary.generatedAt, new Date(2026, 6, 17, 12, 0, 0).toISOString());
+  assert.equal(summary.currentMonth.name, "2026-07");
+  assert.equal(summary.currentMonth.costUsd, 34.5);
+  assert.equal(summary.currentMonth.requests, 9);
+});
+
+test("dashboard summary returns a zero current month when it has no usage", () => {
+  const report = newReport();
+
+  const summary = webSummary(report, defaultOptions({ now: new Date(2026, 6, 17, 12, 0, 0) }));
+
+  assert.equal(summary.currentMonth.name, "2026-07");
+  assert.equal(summary.currentMonth.costUsd, 0);
+});
+
 test("dashboard serves compact 15-minute timelines separately from the summary", () => {
   const report = newReport();
   report.quarterHourly["2026-01-02T12:00Z"] = statsFixture({ costUsd: 3 });
@@ -156,6 +184,9 @@ test("dashboard html renders Token Flow without a duplicate Cost Mix chart", () 
 
   assert.match(html, /id="daily-token-canvas"/);
   assert.match(html, /id="daily-token-hover-legend"/);
+  assert.match(html, /id="token-value-controls"/);
+  assert.match(html, /data-token-flow-value="tokens"/);
+  assert.match(html, /data-token-flow-value="cost"/);
   assert.doesNotMatch(html, /id="cost-mix-canvas"/);
   assert.doesNotMatch(html, /id="cost-mix-hover-legend"/);
   assert.doesNotMatch(html, /<h2>Cost Mix<\/h2>/);
@@ -298,8 +329,19 @@ test("Daily Token Flow value text includes total tokens and total USD cost", () 
   const html = dashboardHtml();
   const chartSource = html.slice(html.indexOf("function renderDailyTokenChart"), html.indexOf("function bindSharedMixCanvas"));
 
+  assert.match(chartSource, /tokenFlowValueMode === 'cost'/);
+  assert.match(chartSource, /key: 'token-' \+ globalTimelineKey\(\)/);
+  assert.doesNotMatch(chartSource, /key:[^\n]*tokenFlowValueMode/);
+  assert.match(chartSource, /mix: costMode \? costMix : tokenMix/);
+  assert.match(chartSource, /scale: costMode \? moneyScale : tokenScale/);
   assert.match(chartSource, /valueText: row =>[\s\S]*formatTokenCount\(totalTokens\(row\)\)/);
   assert.match(chartSource, /valueText: row =>[\s\S]*formatUsdCompact\(row\.costUsd \|\| 0\)/);
+});
+
+test("Cost KPI shows all-time and current calendar month spend", () => {
+  const html = dashboardHtml();
+
+  assert.match(html, /card\('Cost',[\s\S]*summary\.total\.costUsd[\s\S]*This month[\s\S]*summary\.currentMonth\?\.costUsd/);
 });
 
 test("dashboard html exposes the operational overview layout", () => {

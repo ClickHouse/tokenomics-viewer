@@ -9,7 +9,9 @@ test("adaptive resolution selects the finest bucket within the point budget", ()
   assert.equal(timeline.chooseAdaptiveResolution(start, start + 90 * timeline.DAY_MS, 160), "daily");
   assert.equal(timeline.chooseAdaptiveResolution(start, start + 5 * timeline.DAY_MS, 160), "hourly");
   assert.equal(timeline.chooseAdaptiveResolution(start, start + timeline.DAY_MS, 160), "15m");
-  assert.equal(timeline.chooseAdaptiveResolution(start, start + 3 * 365 * timeline.DAY_MS, 160), "monthly");
+  assert.equal(timeline.chooseAdaptiveResolution(start, start + 365 * timeline.DAY_MS, 160), "weekly");
+  assert.equal(timeline.chooseAdaptiveResolution(start, start + 5 * 365 * timeline.DAY_MS, 160), "monthly");
+  assert.equal(timeline.chooseAdaptiveResolution(start, start + 30 * 365 * timeline.DAY_MS, 160), "yearly");
 });
 
 test("relative range clamps to one available day and starts at 15-minute resolution", () => {
@@ -61,7 +63,11 @@ test("bucket names are stable UTC boundaries", () => {
   assert.equal(timeline.bucketName("2026-07-14T12:45Z", "15m"), "2026-07-14T12:45Z");
   assert.equal(timeline.bucketName("2026-07-14T12:45Z", "hourly"), "2026-07-14T12:00Z");
   assert.equal(timeline.bucketName("2026-07-14T12:45Z", "daily"), "2026-07-14");
+  assert.equal(timeline.bucketName("2026-07-14T12:45Z", "weekly"), "2026-07-13");
   assert.equal(timeline.bucketName("2026-07-14T12:45Z", "monthly"), "2026-07");
+  assert.equal(timeline.bucketName("2026-07-14T12:45Z", "yearly"), "2026");
+  assert.equal(timeline.resolutionIntervalMs("weekly"), 7 * timeline.DAY_MS);
+  assert.equal(new Date(timeline.periodStart("2026")).toISOString(), "2026-01-01T00:00:00.000Z");
 });
 
 test("categorical colors stay stable and avoid palette collisions", () => {

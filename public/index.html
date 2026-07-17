@@ -41,6 +41,7 @@
     .card:last-child { border-right:0; }
     .label { color:var(--muted); font-size:12px; }
     .value { font-size:22px; font-weight:700; margin-top:3px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+    .card-meta { color:var(--muted); font-size:12px; margin-top:2px; font-variant-numeric:tabular-nums; }
     .token-card .value { font-size:16px; white-space:nowrap; }
     .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:8px; }
     .panel-title-stack { display:grid; gap:6px; min-width:0; }
@@ -175,6 +176,10 @@
           <div class="hover-legend" id="daily-token-hover-legend"></div>
         </div>
         <div class="date-controls">
+          <div class="segmented" id="token-value-controls" aria-label="Token Flow value">
+            <button class="seg-button active" type="button" data-token-flow-value="tokens" aria-pressed="true">Tokens</button>
+            <button class="seg-button" type="button" data-token-flow-value="cost" aria-pressed="false">Cost</button>
+          </div>
           <div class="segmented" id="token-interaction-controls" aria-label="Token Flow pointer mode">
             <button class="seg-button active" type="button" data-chart-interaction="pan" aria-pressed="true" title="Drag left or right to move through time">Pan</button>
             <button class="seg-button" type="button" data-chart-interaction="zoom" aria-pressed="false" title="Drag across a time range to zoom in">Zoom</button>
@@ -321,8 +326,9 @@
       return Math.abs(value || 0) >= 1_000 ? compactUsd.format(value || 0) : usd.format(value || 0);
     }
 
-    function card(label, value, className = '') {
-      return '<div class="card ' + esc(className) + '"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div></div>';
+    function card(label, value, className = '', meta = '') {
+      return '<div class="card ' + esc(className) + '"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div>' +
+        (meta ? '<div class="card-meta">' + esc(meta) + '</div>' : '') + '</div>';
     }
 
     function costMix(stats = {}) {
@@ -620,7 +626,9 @@
         '<div class="tooltip-title">' + esc(config.title(row)) + '</div>' +
         '<div class="muted">Total ' + esc(formatUsdCompact(totalCost)) + ' · ' + esc(formatTokenCount(total)) + ' tokens</div>' +
         (row.models || []).map(model => {
-          const share = totalCost > 0 ? (model.costUsd || 0) / totalCost : (total > 0 ? totalTokens(model) / total : 0);
+          const share = config.modelShare
+            ? config.modelShare(model, row)
+            : (totalCost > 0 ? (model.costUsd || 0) / totalCost : (total > 0 ? totalTokens(model) / total : 0));
           return '<div class="tooltip-row"><div class="tooltip-model"><span class="swatch" style="background:' + esc(modelColor(model.name)) + '"></span><span title="' + esc(model.name) + '">' + esc(model.name) + '</span></div>' +
             '<div class="tooltip-value">' + esc(formatUsdCompact(model.costUsd || 0)) + ' / ' + esc(formatTokenCount(totalTokens(model))) + ' / ' + esc(formatPct(share)) + '</div></div>';
         }).join('');
@@ -975,16 +983,26 @@
     }
 
     function renderDailyTokenChart(rows) {
+      const costMode = tokenFlowValueMode === 'cost';
+      const canvas = document.getElementById('daily-token-canvas');
+      canvas?.setAttribute('aria-label', costMode
+        ? 'Adaptive input, cache, and output cost flow'
+        : 'Adaptive input, cache, and output token flow');
       renderSharedMixChart(dailyTokenChart, rows || [], {
         key: 'token-' + globalTimelineKey(),
         fullDomain: timelineRangeDomain(timelineRanges.token),
-        emptyText: 'No token data in this period',
-        yLabel: resolution => 'tokens/' + resolution + ' (log)',
-        value: row => totalTokens(row),
-        valueText: row => formatTokenCount(totalTokens(row)) + ' tokens · ' + formatUsdCompact(row.costUsd || 0),
-        axisText: value => formatTokenCount(value),
-        scale: tokenScale,
-        mix: tokenMix,
+        emptyText: 'No usage data in this period',
+        yLabel: resolution => (costMode ? 'cost/' : 'tokens/') + resolution + ' (log)',
+        value: row => costMode ? (row.costUsd || 0) : totalTokens(row),
+        valueText: row => costMode
+          ? formatUsdCompact(row.costUsd || 0) + ' · ' + formatTokenCount(totalTokens(row)) + ' tokens'
+          : formatTokenCount(totalTokens(row)) + ' tokens · ' + formatUsdCompact(row.costUsd || 0),
+        axisText: value => costMode ? formatUsdCompact(value) : formatTokenCount(value),
+        scale: costMode ? moneyScale : tokenScale,
+        mix: costMode ? costMix : tokenMix,
+        modelShare: (model, row) => costMode
+          ? ((row.costUsd || 0) > 0 ? (model.costUsd || 0) / row.costUsd : 0)
+          : (totalTokens(row) > 0 ? totalTokens(model) / totalTokens(row) : 0),
         title: row => row.name === 'Total' ? 'Total · ' + row.rangeLabel : periodLabel(row.name),
         displayTitle: row => row.name === 'Total' ? 'Total · ' + row.rangeLabel : periodLabel(row.name),
         xLabel: row => periodLabel(row.name),
@@ -1110,6 +1128,27 @@
     let configurationRequiresSync = false;
     const overviewModelLimit = 10;
     let dashboardMode = storedDashboardMode();
+    function storedTokenFlowValueMode() {
+      try {
+        const value = localStorage.getItem('tokenomics-token-flow-value-mode');
+        return value === 'cost' ? 'cost' : 'tokens';
+      } catch {
+        return 'tokens';
+      }
+    }
+    let tokenFlowValueMode = storedTokenFlowValueMode();
+
+    function applyTokenFlowValueMode({ persist = true } = {}) {
+      document.querySelectorAll('#token-value-controls [data-token-flow-value]').forEach(button => {
+        const active = button.dataset.tokenFlowValue === tokenFlowValueMode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      if (persist) {
+        try { localStorage.setItem('tokenomics-token-flow-value-mode', tokenFlowValueMode); } catch {}
+      }
+      if (cachedSummary) renderDailyTokenChart(tokenFlowRows());
+    }
 
     function storedDashboardMode() {
       try {
@@ -1250,6 +1289,7 @@
     }
 
     function periodLabel(name) {
+      if (/^\d{4}$/.test(name)) return name;
       if (name.length === 10) return name;
       const date = new Date(TokenomicsTimeline.periodStart(name));
       if (Number.isNaN(date.getTime())) return name;
@@ -1551,7 +1591,7 @@
       updated.textContent = 'Updated just now';
       updated.title = new Date(summary.generatedAt).toLocaleString();
       document.getElementById('cards').innerHTML = [
-        card('Cost', formatUsdCompact(summary.total.costUsd || 0)),
+        card('Cost', formatUsdCompact(summary.total.costUsd || 0), '', 'This month ' + formatUsdCompact(summary.currentMonth?.costUsd || 0)),
         card('Requests', formatTokenCount(summary.total.requests || 0)),
         card('Input Tokens', segmentCardText(summary.total, 'input'), 'token-card'),
         card('Cache Tokens', segmentCardText(summary.total, 'cache'), 'token-card'),
@@ -2045,6 +2085,12 @@
       dashboardMode = mode;
       applyDashboardMode();
     });
+    document.getElementById('token-value-controls').addEventListener('click', event => {
+      const mode = event.target?.dataset?.tokenFlowValue;
+      if (!['tokens', 'cost'].includes(mode) || mode === tokenFlowValueMode) return;
+      tokenFlowValueMode = mode;
+      applyTokenFlowValueMode();
+    });
     let activeSectionTarget = 'overview-section';
     function syncSectionNav() {
       const threshold = document.getElementById('app-header').getBoundingClientRect().height + 24;
@@ -2085,6 +2131,7 @@
     new ResizeObserver(() => { if (cachedSummary) renderDailyTokenChart(tokenFlowRows()); }).observe(document.getElementById('daily-token-canvas'));
     new ResizeObserver(() => { if (cachedSummary) renderProjectDailyChart(selectedProjectFromSummary(cachedSummary)); }).observe(document.getElementById('project-cost-canvas'));
     applyDashboardMode({ persist: false });
+    applyTokenFlowValueMode({ persist: false });
     initializeDashboard().catch(error => { document.body.innerHTML = '<main><section><h2>Failed to load dashboard</h2><pre>' + esc(error.stack || error.message) + '</pre></section></main>'; });
   </script>
 </body>
