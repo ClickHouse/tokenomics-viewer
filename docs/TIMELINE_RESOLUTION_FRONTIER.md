@@ -12,7 +12,7 @@ Current frontier: range-bounded timelines with adaptive resolution
 - Token Flow and Project Cost each expose an independent `Relative | Absolute`
   date range. Relative ranges are anchored to the latest measured row;
   absolute bounds are inclusive UTC calendar dates. Both charts default to a
-  one-month relative range.
+  one-month relative range and offer an explicit month-to-date calendar range.
 - Wheel and selection zoom operate only inside the selected date range. The
   visible domain automatically selects yearly, monthly, weekly, daily, hourly,
   or 15-minute buckets to keep the chart readable while preserving 15-minute
@@ -28,8 +28,9 @@ Current frontier: range-bounded timelines with adaptive resolution
   without changing the selected range or zoom domain. A separate Cost Mix chart
   is rejected because it visualizes the same rows and cost components.
 - The Cost KPI shows all-time spend as its primary value and the current local
-  calendar month's spend as secondary context. The month key is computed with
-  the same local-calendar rule as report aggregation.
+  calendar month's spend as secondary context. An optional database-backed
+  monthly USD limit adds used share and remaining or overage cost. The month
+  key is computed with the same local-calendar rule as report aggregation.
 - Missing or invalid timestamps remain in total aggregates but are excluded from
   intraday timelines.
 - The summary payload excludes intraday rows. `/api/timeline` returns a compact
@@ -42,7 +43,8 @@ Current frontier: range-bounded timelines with adaptive resolution
   Visible models receive distinct categorical colors until the expanded palette
   is exhausted; hash collisions may not silently reuse a color.
 - Hover or a pinned project interval shows total cost/tokens plus per-model
-  `cost / tokens / share`; the chart header remains the aggregate interval mix.
+  `cost / tokens / share`; the selected-range Total remains visible on a
+  separate legend line while interval details are inspected.
 
 ## Rejected Surface
 
@@ -62,8 +64,9 @@ Current frontier: range-bounded timelines with adaptive resolution
    coverage counters must remain additive.
 3. Zoom is represented as UTC time bounds, never row indexes, because row
    indexes are not stable across bucket widths.
-4. Adaptive resolution selects the finest bucket that stays within the chart's
-   point budget; the minimum domain is one 15-minute bucket.
+4. Adaptive resolution selects the finest useful bucket within both the chart
+   point budget and semantic caps: 90 daily, 26 weekly, and 24 monthly points.
+   The minimum domain is one 15-minute bucket.
 5. A relative range is intersected with the measured data bounds. A project
    with one measured day starts with a one-day domain and 15-minute buckets,
    never a mostly empty month-long domain with one daily point.
@@ -78,6 +81,9 @@ Current frontier: range-bounded timelines with adaptive resolution
     token percentages use token totals and cost percentages use cost totals.
 11. The current-month KPI is a presentation slice of the existing monthly
     aggregate; it never triggers ingestion, repricing, or another timeline scan.
+12. A monthly limit is configuration metadata, not a pricing input. Editing it
+    may publish a configuration revision but may not invalidate source-derived
+    analytics or require session reimport.
 
 ## Falsifiers
 
@@ -87,10 +93,12 @@ Current frontier: range-bounded timelines with adaptive resolution
 - Hourly folding equals the sum of its four quarter-hour rows, including cache
   creation/read cost and priced/unpriced counters.
 - Invalid timestamps do not create a `1970` or `unknown` intraday point.
-- A 90-day domain renders daily buckets, a one-year domain renders weekly
-  buckets, a five-year domain renders monthly buckets, a 30-year domain renders
-  yearly buckets, a five-day domain renders hourly buckets, and a one-day
-  domain renders 15-minute buckets at the standard point budget.
+- A 90-day domain renders daily buckets, a 180-day domain renders weekly
+  buckets, a one-year domain renders monthly buckets, a three-year domain
+  renders yearly buckets, a five-day domain renders hourly buckets, and a
+  one-day domain renders 15-minute buckets at the standard point budget.
+- Month-to-date begins on local calendar day one and ends on the generated
+  report date; it is not a rolling 30-day alias.
 - A 30-day relative selection over a project with only one measured day clamps
   to that day and starts at 15-minute resolution.
 - Wheel anchoring preserves the timestamp under the pointer, never exceeds the
@@ -109,6 +117,9 @@ Current frontier: range-bounded timelines with adaptive resolution
   measure.
 - Adjacent monthly buckets around report time do not leak into the current-month
   KPI; a month without usage renders zero rather than an absent value.
+- Hovering a daily or weekly point does not replace or hide the selected-range
+  Total. A configured monthly limit reports non-negative remaining cost below
+  the limit and non-negative overage above it.
 - Two model identifiers with the same initial palette hash receive different,
   stable colors.
 - A third requested timeline range evicts the oldest of the two cached ranges.

@@ -89,6 +89,9 @@
     if (range.mode === "absolute") {
       start = periodStart(range.from);
       end = periodStart(range.to) + DAY_MS;
+    } else if (range.calendarMonth) {
+      start = Date.parse(range.monthStartAt);
+      end = Date.parse(range.monthEndAt);
     } else {
       const availableStart = periodStart(range.availableFrom);
       const availableEnd = periodStart(range.availableTo);
@@ -130,14 +133,31 @@
     return null;
   }
 
+  function bucketCenter(name, resolution) {
+    const start = periodStart(name);
+    if (!Number.isFinite(start)) return NaN;
+    if (resolution === "monthly") {
+      const end = new Date(start);
+      end.setUTCMonth(end.getUTCMonth() + 1);
+      return start + (end.getTime() - start) / 2;
+    }
+    if (resolution === "yearly") {
+      const end = new Date(start);
+      end.setUTCFullYear(end.getUTCFullYear() + 1);
+      return start + (end.getTime() - start) / 2;
+    }
+    const interval = resolutionIntervalMs(resolution);
+    return Number.isFinite(interval) ? start + interval / 2 : NaN;
+  }
+
   function chooseAdaptiveResolution(start, end, pointBudget = 160) {
     const span = Math.max(QUARTER_HOUR_MS, end - start);
     const budget = Math.max(1, Math.floor(pointBudget));
     if (span / QUARTER_HOUR_MS <= budget) return "15m";
     if (span / HOUR_MS <= budget) return "hourly";
-    if (span / DAY_MS <= budget) return "daily";
-    if (span / WEEK_MS <= budget) return "weekly";
-    if (span / MONTH_ESTIMATE_MS <= budget) return "monthly";
+    if (span / DAY_MS <= Math.min(budget, 90)) return "daily";
+    if (span / WEEK_MS <= Math.min(budget, 26)) return "weekly";
+    if (span / MONTH_ESTIMATE_MS <= Math.min(budget, 24)) return "monthly";
     return "yearly";
   }
 
@@ -196,6 +216,7 @@
     QUARTER_HOUR_MS,
     HOUR_MS,
     DAY_MS,
+    bucketCenter,
     bucketName,
     chooseAdaptiveResolution,
     createCategoricalColorScale,

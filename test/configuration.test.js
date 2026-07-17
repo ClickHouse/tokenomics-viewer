@@ -19,6 +19,7 @@ test("default configuration exposes a validated editable pricing catalog", () =>
   assert.equal(configuration.settings.openaiContext, "auto");
   assert.equal(configuration.settings.pricingBasis, "standard");
   assert.equal(configuration.settings.regionalMultiplier, 1);
+  assert.equal(configuration.settings.monthlyCostLimitUsd, null);
   assert.ok(configuration.prices.some((row) => row.provider === "openai" && row.model === "gpt-5.6-luna" && row.variant === "short"));
   assert.ok(configuration.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-4-8"));
   assert.deepEqual(normalizeConfiguration(configuration), configuration);
@@ -80,6 +81,17 @@ test("configuration validation rejects stale or ambiguous pricing input", () => 
   const unsupportedBasis = defaultConfiguration();
   unsupportedBasis.settings.pricingBasis = "batch";
   assert.throws(() => normalizeConfiguration(unsupportedBasis), /pricingBasis must be standard or custom/);
+
+  const invalidMonthlyLimit = defaultConfiguration();
+  invalidMonthlyLimit.settings.monthlyCostLimitUsd = 0;
+  assert.throws(() => normalizeConfiguration(invalidMonthlyLimit), /monthlyCostLimitUsd must be a positive number or null/);
+});
+
+test("configuration preserves an optional monthly cost limit", () => {
+  const configuration = defaultConfiguration();
+  configuration.settings.monthlyCostLimitUsd = 10_000;
+
+  assert.equal(normalizeConfiguration(configuration).settings.monthlyCostLimitUsd, 10_000);
 });
 
 test("custom providers and models use generic database pricing rows", () => {
@@ -144,9 +156,12 @@ test("SQLite configuration revisions round-trip and reject stale writers", async
   const initial = await loadConfiguration(options);
   const edited = structuredClone(initial);
   edited.settings.regionalMultiplier = 1.1;
+  edited.settings.monthlyCostLimitUsd = 10_000;
 
   const saved = await saveConfiguration(options, edited);
   assert.notEqual(saved.revision, initial.revision);
-  assert.equal((await loadConfiguration(options)).settings.regionalMultiplier, 1.1);
+  const reloaded = await loadConfiguration(options);
+  assert.equal(reloaded.settings.regionalMultiplier, 1.1);
+  assert.equal(reloaded.settings.monthlyCostLimitUsd, 10_000);
   await assert.rejects(saveConfiguration(options, edited), /configuration revision conflict/);
 });

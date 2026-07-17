@@ -88,7 +88,7 @@
     .metric-cell span { color:var(--muted); font-size:11px; }
     .project-model-summary { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; }
     .project-model-table { width:100%; border-collapse:collapse; min-width:1120px; }
-    .settings-grid { display:grid; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap:10px; margin-bottom:14px; }
+    .settings-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-bottom:14px; }
     .settings-field { display:grid; gap:5px; color:var(--muted); font-size:12px; }
     .settings-field select, .settings-field input, .pricing-table input, .pricing-table select { min-height:32px; border:1px solid var(--line); border-radius:5px; padding:5px 7px; color:var(--fg); background:var(--panel); }
     .settings-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
@@ -116,7 +116,8 @@
     .seg-input { background:var(--accent); }
     .seg-cache { background:var(--cache); }
     .seg-output { background:var(--out); }
-    .hover-legend { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; min-height:24px; color:var(--muted); font-size:12px; }
+    .hover-legend { display:grid; justify-items:end; gap:5px; min-height:24px; color:var(--muted); font-size:12px; }
+    .legend-line { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
     .hover-legend strong { color:var(--fg); font-weight:650; max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .mix-pill { display:inline-flex; align-items:center; gap:5px; padding:3px 7px; border:1px solid var(--line); border-radius:999px; background:var(--soft); white-space:nowrap; }
     .muted { color:var(--muted); }
@@ -136,7 +137,7 @@
     body[data-dashboard-mode="settings"] #pricing-settings { display:block; }
     body[data-dashboard-mode="settings"] .section-nav { display:none; }
     @media (max-width: 1180px) { .cards { grid-template-columns:repeat(3, minmax(0, 1fr)); } .card:nth-child(3) { border-right:0; } .card:nth-child(n+4) { border-top:1px solid var(--line); } }
-    @media (max-width: 760px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } .card, .card:nth-child(3) { border-right:1px solid var(--line); border-top:1px solid var(--line); } .card:nth-child(-n+2) { border-top:0; } .card:nth-child(2n) { border-right:0; } .card:last-child { grid-column:1 / -1; border-right:0; } .panel-head { display:grid; } .chart-head-meta { justify-items:start; } .hover-legend { justify-content:flex-start; } .date-controls { justify-content:flex-start; } .recommendation-list { grid-template-columns:1fr; } .recommendation-item:nth-child(odd) { border-right:0; } .settings-grid { grid-template-columns:1fr; } .settings-actions { justify-content:flex-start; } .pricing-table th:nth-child(2), .pricing-table td:nth-child(2) { position:static; box-shadow:none; } }
+    @media (max-width: 760px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } .card, .card:nth-child(3) { border-right:1px solid var(--line); border-top:1px solid var(--line); } .card:nth-child(-n+2) { border-top:0; } .card:nth-child(2n) { border-right:0; } .card:last-child { grid-column:1 / -1; border-right:0; } .panel-head { display:grid; } .chart-head-meta { justify-items:start; } .hover-legend { justify-items:start; } .legend-line { justify-content:flex-start; } .date-controls { justify-content:flex-start; } .recommendation-list { grid-template-columns:1fr; } .recommendation-item:nth-child(odd) { border-right:0; } .settings-grid { grid-template-columns:1fr; } .settings-actions { justify-content:flex-start; } .pricing-table th:nth-child(2), .pricing-table td:nth-child(2) { position:static; box-shadow:none; } }
     @media (max-width: 560px) { .brand-row { align-items:flex-start; flex-wrap:wrap; } .brand-group { align-items:flex-start; flex-direction:column; gap:3px; } .header-actions { width:100%; justify-content:space-between; } .sync-state { max-width:240px; } .section-nav { gap:18px; } main { padding:12px; } section { scroll-margin-top:170px; } .cards { grid-template-columns:1fr; } .card, .card:nth-child(3), .card:nth-child(2n) { border-right:0; border-top:1px solid var(--line); } .card:first-child { border-top:0; } .card:last-child { grid-column:auto; } .token-card .value { white-space:normal; } .chart-wrap, .project-chart-wrap { min-height:330px; } .mix-canvas { height:330px; } .date-control-group { flex-wrap:wrap; } .chart-help::after { position:fixed; inset:auto 12px 12px 12px; width:auto; transform:translateY(3px); } }
   </style>
 </head>
@@ -190,7 +191,7 @@
             <button class="seg-button" type="button" data-timeline-date-mode="absolute" aria-pressed="false">Absolute</button>
           </div>
           <select class="date-input" id="token-relative-range" aria-label="Token Flow relative date range">
-            <option value="30" selected>1M</option><option value="90">3M</option><option value="180">6M</option><option value="365">1Y</option><option value="all">All</option>
+            <option value="month">MTD</option><option value="30" selected>1M</option><option value="90">3M</option><option value="180">6M</option><option value="365">1Y</option><option value="all">All</option>
           </select>
           <div class="date-control-group is-hidden" id="token-absolute-range">
             <label class="date-label">From <input class="date-input" id="token-date-from" type="date"></label>
@@ -218,7 +219,7 @@
                 <button class="seg-button" type="button" data-timeline-date-mode="absolute" aria-pressed="false">Absolute</button>
               </div>
               <select class="date-input" id="project-relative-range" aria-label="Project Cost relative date range">
-                <option value="30" selected>1M</option><option value="90">3M</option><option value="180">6M</option><option value="365">1Y</option><option value="all">All</option>
+                <option value="month">MTD</option><option value="30" selected>1M</option><option value="90">3M</option><option value="180">6M</option><option value="365">1Y</option><option value="all">All</option>
               </select>
               <div class="date-control-group is-hidden" id="project-absolute-range">
                 <label class="date-label">From <input class="date-input" id="project-date-from" type="date"></label>
@@ -243,6 +244,7 @@
             <button class="seg-button" type="button" data-model-date-mode="absolute" aria-pressed="false">Absolute</button>
           </div>
           <select class="date-input" id="model-relative-range" aria-label="Model relative date range">
+            <option value="month">MTD</option>
             <option value="30">1M</option>
             <option value="90">3M</option>
             <option value="180">6M</option>
@@ -278,6 +280,9 @@
         </label>
         <label class="settings-field">Global rate multiplier
           <input id="setting-regional-multiplier" type="number" min="0.5" max="2" step="0.01" inputmode="decimal">
+        </label>
+        <label class="settings-field">Monthly cost limit (USD)
+          <input id="setting-monthly-cost-limit" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Not set">
         </label>
       </div>
       <div class="table-scroll pricing-scroll"><table class="pricing-table" id="pricing-table"></table></div>
@@ -329,6 +334,19 @@
     function card(label, value, className = '', meta = '') {
       return '<div class="card ' + esc(className) + '"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div>' +
         (meta ? '<div class="card-meta">' + esc(meta) + '</div>' : '') + '</div>';
+    }
+
+    function currentMonthCostMeta(month = {}) {
+      const label = month.name ? periodLabel(month.name) : 'This month';
+      const spend = formatUsdCompact(month.costUsd || 0);
+      if (!Number.isFinite(month.limitUsd) || month.limitUsd <= 0) {
+        return label + ' ' + spend + ' · Set monthly limit in Settings';
+      }
+      const distance = (month.overageUsd || 0) > 0
+        ? formatUsdCompact(month.overageUsd) + ' over'
+        : formatUsdCompact(month.remainingUsd || 0) + ' left';
+      return label + ' ' + spend + ' / ' + formatUsdCompact(month.limitUsd) +
+        ' · ' + formatPct(month.usedRatio || 0) + ' used · ' + distance;
     }
 
     function costMix(stats = {}) {
@@ -766,6 +784,16 @@
       if (pinned && !hovered) drawSharedPinnedMarker(ctx, node);
     }
 
+    function sharedMixLegendContent(row, config) {
+      const mix = config.mix(row);
+      return '<strong title="' + esc(config.title(row)) + '">' + esc(config.displayTitle(row)) + '</strong>' +
+        '<span>' + esc(config.valueText(row)) + '</span>' +
+        sharedMixSegments.map(segment => (
+          '<span class="mix-pill"><span class="swatch" style="background:' + esc(segment.color()) + '"></span>' +
+          esc(segment.label) + ' ' + esc(segmentShareText(row, segment, mix)) + '</span>'
+        )).join('') + (config.extraLegend ? config.extraLegend(row) : '');
+    }
+
     function renderSharedMixLegend(chart, row, config) {
       const el = document.getElementById(chart.legendId);
       if (!el) return;
@@ -773,14 +801,10 @@
         el.innerHTML = '<span class="muted">' + esc(config.emptyText) + '</span>';
         return;
       }
-      const mix = config.mix(row);
-      el.innerHTML =
-        '<strong title="' + esc(config.title(row)) + '">' + esc(config.displayTitle(row)) + '</strong>' +
-        '<span>' + esc(config.valueText(row)) + '</span>' +
-        sharedMixSegments.map(segment => (
-          '<span class="mix-pill"><span class="swatch" style="background:' + esc(segment.color()) + '"></span>' +
-          esc(segment.label) + ' ' + esc(segmentShareText(row, segment, mix)) + '</span>'
-        )).join('') + (config.extraLegend ? config.extraLegend(row) : '');
+      const total = config.summaryRow || row;
+      const detail = row !== total && row.name !== 'Total' ? row : null;
+      el.innerHTML = '<div class="legend-line">' + sharedMixLegendContent(total, config) + '</div>' +
+        (detail ? '<div class="legend-line">' + sharedMixLegendContent(detail, config) + '</div>' : '');
     }
 
     function renderSharedMixChart(chart, sourceRows, config) {
@@ -835,7 +859,11 @@
         ...config,
         intervalMs,
         resolution,
-        summaryRow: { name: 'Total', rangeLabel: visibleDomainLabel(chart.domain, resolution), ...sumPeriodStats(filtered) },
+        summaryRow: {
+          name: 'Total',
+          rangeLabel: visibleDomainLabel(chart.domain, resolution, Boolean(config.localCalendarRange)),
+          ...sumPeriodStats(filtered),
+        },
         yLabel: typeof config.yLabel === 'function' ? config.yLabel(resolution) : config.yLabel,
       };
       chart.rows = visible;
@@ -846,7 +874,7 @@
       const domainSpan = Math.max(TokenomicsTimeline.QUARTER_HOUR_MS, chart.domain.end - chart.domain.start);
       const x = row => {
         if (visible.length === 1) return plot.left + plot.width / 2;
-        const center = TokenomicsTimeline.periodStart(row.name) + intervalMs / 2;
+        const center = TokenomicsTimeline.bucketCenter(row.name, resolution);
         return plot.left + clamp((center - chart.domain.start) / domainSpan, 0, 1) * plot.width;
       };
       const y = value => plot.top + plot.height - (resolvedConfig.scale(value) / maxScaled) * plot.height;
@@ -938,6 +966,7 @@
       renderSharedMixChart(projectChart, projectTimelineRows(selectedProject), {
         key: 'project-' + projectTimelineKey(selectedProject),
         fullDomain: timelineRangeDomain(timelineRanges.project),
+        localCalendarRange: timelineRanges.project.calendarMonth,
         emptyText: selectedProject
           ? (projectTimelineRequests.has(projectTimelineKey(selectedProject)) ? 'Loading project timeline...' : 'No project timeline data')
           : 'No projects',
@@ -991,6 +1020,7 @@
       renderSharedMixChart(dailyTokenChart, rows || [], {
         key: 'token-' + globalTimelineKey(),
         fullDomain: timelineRangeDomain(timelineRanges.token),
+        localCalendarRange: timelineRanges.token.calendarMonth,
         emptyText: 'No usage data in this period',
         yLabel: resolution => (costMode ? 'cost/' : 'tokens/') + resolution + ' (log)',
         value: row => costMode ? (row.costUsd || 0) : totalTokens(row),
@@ -1118,8 +1148,8 @@
     const projectTimelineCache = new Map();
     const projectTimelineRequests = new Map();
     const timelineRanges = {
-      token: { mode: 'relative', days: 30, from: '', to: '' },
-      project: { mode: 'relative', days: 30, from: '', to: '' },
+      token: { mode: 'relative', days: 30, calendarMonth: false, monthStartAt: '', monthEndAt: '', from: '', to: '' },
+      project: { mode: 'relative', days: 30, calendarMonth: false, monthStartAt: '', monthEndAt: '', from: '', to: '' },
     };
     let modelDateMode = 'relative';
     let modelRelativeDays = Infinity;
@@ -1211,11 +1241,14 @@
     function timelineRangeKey(range) {
       return range.mode === 'absolute'
         ? 'absolute:' + (range.from || '') + ':' + (range.to || '')
-        : 'relative:' + (Number.isFinite(range.days) ? range.days : 'all');
+        : (range.calendarMonth
+          ? 'relative:month:' + (range.monthStartAt || '') + ':' + (range.monthEndAt || '')
+          : 'relative:' + (Number.isFinite(range.days) ? range.days : 'all'));
     }
 
     function timelineRangeQuery(range) {
       if (range.mode === 'absolute') return { from: range.from || undefined, to: range.to || undefined };
+      if (range.calendarMonth) return { fromAt: range.monthStartAt || undefined, toAt: range.monthEndAt || undefined };
       return Number.isFinite(range.days) ? { days: range.days } : {};
     }
 
@@ -1249,7 +1282,7 @@
         button.setAttribute('aria-pressed', String(active));
       });
       const relative = document.getElementById(kind + '-relative-range');
-      relative.value = Number.isFinite(range.days) ? String(range.days) : 'all';
+      relative.value = range.calendarMonth ? 'month' : (Number.isFinite(range.days) ? String(range.days) : 'all');
       relative.classList.toggle('is-hidden', range.mode !== 'relative');
       document.getElementById(kind + '-absolute-range').classList.toggle('is-hidden', range.mode !== 'absolute');
     }
@@ -1258,12 +1291,13 @@
       return TokenomicsTimeline.rangeDomain(range);
     }
 
-    function visibleDomainLabel(domain, resolution) {
+    function visibleDomainLabel(domain, resolution, localCalendar = false) {
       const start = new Date(domain.start);
       const end = new Date(domain.end - 1);
       const options = resolution === '15m' || resolution === 'hourly'
-        ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }
-        : { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' };
+        ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+        : { year: 'numeric', month: 'short', day: 'numeric' };
+      if (!localCalendar) options.timeZone = 'UTC';
       return start.toLocaleString([], options) + ' - ' + end.toLocaleString([], options);
     }
 
@@ -1293,7 +1327,7 @@
       if (name.length === 10) return name;
       const date = new Date(TokenomicsTimeline.periodStart(name));
       if (Number.isNaN(date.getTime())) return name;
-      if (/^\d{4}-\d{2}$/.test(name)) return date.toLocaleDateString([], { month: 'short', year: 'numeric' });
+      if (/^\d{4}-\d{2}$/.test(name)) return date.toLocaleDateString([], { month: 'short', year: 'numeric', timeZone: 'UTC' });
       return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
@@ -1370,6 +1404,13 @@
         const from = document.getElementById('model-date-from').value || bounds.min;
         const to = document.getElementById('model-date-to').value || bounds.max;
         return { from: from <= to ? from : to, to: from <= to ? to : from, includeUnknown: false };
+      }
+      if (modelRelativeDays === 'month') {
+        return {
+          from: summary.currentMonth?.name ? summary.currentMonth.name + '-01' : bounds.max.slice(0, 7) + '-01',
+          to: summary.currentMonth?.through || bounds.max,
+          includeUnknown: false,
+        };
       }
       if (!Number.isFinite(modelRelativeDays)) return { from: bounds.min, to: bounds.max, includeUnknown: true };
       const lastTime = Date.parse(bounds.max + 'T00:00:00Z');
@@ -1591,12 +1632,16 @@
       updated.textContent = 'Updated just now';
       updated.title = new Date(summary.generatedAt).toLocaleString();
       document.getElementById('cards').innerHTML = [
-        card('Cost', formatUsdCompact(summary.total.costUsd || 0), '', 'This month ' + formatUsdCompact(summary.currentMonth?.costUsd || 0)),
+        card('Cost', formatUsdCompact(summary.total.costUsd || 0), '', currentMonthCostMeta(summary.currentMonth)),
         card('Requests', formatTokenCount(summary.total.requests || 0)),
         card('Input Tokens', segmentCardText(summary.total, 'input'), 'token-card'),
         card('Cache Tokens', segmentCardText(summary.total, 'cache'), 'token-card'),
         card('Output Tokens', segmentCardText(summary.total, 'output'), 'token-card'),
       ].join('');
+      for (const range of Object.values(timelineRanges)) {
+        range.monthStartAt = summary.currentMonth?.startAt || '';
+        range.monthEndAt = summary.currentMonth?.endAt || '';
+      }
       renderRecommendations(summary);
       renderTimelineDateControls('token', summary.daily || []);
       renderDailyTokenChart(tokenFlowRows());
@@ -1612,12 +1657,14 @@
     let syncEventSource = null;
     let syncAvailable = false;
 
-    async function fetchTimeline({ project, days, from, to } = {}) {
+    async function fetchTimeline({ project, days, from, to, fromAt, toAt } = {}) {
       const params = new URLSearchParams();
       if (project) params.set('project', project);
       if (Number.isFinite(days)) params.set('days', String(days));
       if (from) params.set('from', from);
       if (to) params.set('to', to);
+      if (fromAt) params.set('fromAt', fromAt);
+      if (toAt) params.set('toAt', toAt);
       const response = await fetch('/api/timeline' + (params.size ? '?' + params.toString() : ''), { cache: 'no-store' });
       if (!response.ok) throw new Error('Timeline request failed: HTTP ' + response.status);
       return response.json();
@@ -1753,6 +1800,7 @@
       document.getElementById('setting-openai-context').value = configurationState.settings.openaiContext;
       document.getElementById('setting-pricing-basis').value = configurationState.settings.pricingBasis;
       document.getElementById('setting-regional-multiplier').value = configurationState.settings.regionalMultiplier;
+      document.getElementById('setting-monthly-cost-limit').value = configurationState.settings.monthlyCostLimitUsd ?? '';
       const table = document.getElementById('pricing-table');
       table.innerHTML =
         '<thead><tr><th>Provider</th><th>Model</th><th>Match</th><th>Variant</th><th>Effective from</th><th>Effective until</th><th>Input</th><th>Cache 5m write</th><th>Cache 30m write</th><th>Cache 1h write</th><th>Cache read</th><th>Output</th><th>Source</th><th></th></tr></thead>' +
@@ -1777,6 +1825,7 @@
     }
 
     function configurationFromEditor() {
+      const monthlyCostLimit = document.getElementById('setting-monthly-cost-limit').value.trim();
       const prices = [...document.querySelectorAll('#pricing-table tbody tr')].map(row => {
         const result = {};
         row.querySelectorAll('[data-price-field]').forEach(input => {
@@ -1794,6 +1843,7 @@
           openaiContext: document.getElementById('setting-openai-context').value,
           pricingBasis: document.getElementById('setting-pricing-basis').value,
           regionalMultiplier: Number(document.getElementById('setting-regional-multiplier').value),
+          monthlyCostLimitUsd: monthlyCostLimit === '' ? null : Number(monthlyCostLimit),
         },
         prices,
       };
@@ -1983,7 +2033,8 @@
         applyTimelineRangeChange(kind);
       });
       document.getElementById(kind + '-relative-range').addEventListener('change', event => {
-        range.days = event.target.value === 'all' ? Infinity : Number(event.target.value);
+        range.calendarMonth = event.target.value === 'month';
+        if (!range.calendarMonth) range.days = event.target.value === 'all' ? Infinity : Number(event.target.value);
         applyTimelineRangeChange(kind);
       });
       document.getElementById(kind + '-date-from').addEventListener('change', event => {
@@ -2027,7 +2078,9 @@
       if (cachedSummary) renderModelAnalysis(cachedSummary);
     });
     document.getElementById('model-relative-range').addEventListener('change', event => {
-      modelRelativeDays = event.target.value === 'all' ? Infinity : Number(event.target.value);
+      modelRelativeDays = event.target.value === 'month'
+        ? 'month'
+        : (event.target.value === 'all' ? Infinity : Number(event.target.value));
       if (cachedSummary) renderModelAnalysis(cachedSummary);
     });
     document.getElementById('model-date-from').addEventListener('change', event => {

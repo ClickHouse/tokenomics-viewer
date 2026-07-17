@@ -9,9 +9,23 @@ test("adaptive resolution selects the finest bucket within the point budget", ()
   assert.equal(timeline.chooseAdaptiveResolution(start, start + 90 * timeline.DAY_MS, 160), "daily");
   assert.equal(timeline.chooseAdaptiveResolution(start, start + 5 * timeline.DAY_MS, 160), "hourly");
   assert.equal(timeline.chooseAdaptiveResolution(start, start + timeline.DAY_MS, 160), "15m");
-  assert.equal(timeline.chooseAdaptiveResolution(start, start + 365 * timeline.DAY_MS, 160), "weekly");
-  assert.equal(timeline.chooseAdaptiveResolution(start, start + 5 * 365 * timeline.DAY_MS, 160), "monthly");
-  assert.equal(timeline.chooseAdaptiveResolution(start, start + 30 * 365 * timeline.DAY_MS, 160), "yearly");
+  assert.equal(timeline.chooseAdaptiveResolution(start, start + 180 * timeline.DAY_MS, 160), "weekly");
+  assert.equal(timeline.chooseAdaptiveResolution(start, start + 365 * timeline.DAY_MS, 160), "monthly");
+  assert.equal(timeline.chooseAdaptiveResolution(start, start + 3 * 365 * timeline.DAY_MS, 160), "yearly");
+});
+
+test("calendar-month range covers month-to-date instead of a rolling window", () => {
+  assert.deepEqual(timeline.rangeDomain({
+    mode: "relative",
+    calendarMonth: true,
+    monthStartAt: "2026-07-01T04:00:00.000Z",
+    monthEndAt: "2026-07-18T04:00:00.000Z",
+    availableFrom: "2025-01-01",
+    availableTo: "2026-07-17",
+  }), {
+    start: Date.parse("2026-07-01T04:00:00Z"),
+    end: Date.parse("2026-07-18T04:00:00Z"),
+  });
 });
 
 test("relative range clamps to one available day and starts at 15-minute resolution", () => {
@@ -68,6 +82,22 @@ test("bucket names are stable UTC boundaries", () => {
   assert.equal(timeline.bucketName("2026-07-14T12:45Z", "yearly"), "2026");
   assert.equal(timeline.resolutionIntervalMs("weekly"), 7 * timeline.DAY_MS);
   assert.equal(new Date(timeline.periodStart("2026")).toISOString(), "2026-01-01T00:00:00.000Z");
+});
+
+test("calendar bucket centers use actual month and year lengths", () => {
+  const leapFebruaryStart = Date.parse("2024-02-01T00:00:00Z");
+  const leapMarchStart = Date.parse("2024-03-01T00:00:00Z");
+  assert.equal(
+    timeline.bucketCenter("2024-02", "monthly"),
+    leapFebruaryStart + (leapMarchStart - leapFebruaryStart) / 2,
+  );
+
+  const yearStart = Date.parse("2024-01-01T00:00:00Z");
+  const nextYearStart = Date.parse("2025-01-01T00:00:00Z");
+  assert.equal(
+    timeline.bucketCenter("2024", "yearly"),
+    yearStart + (nextYearStart - yearStart) / 2,
+  );
 });
 
 test("categorical colors stay stable and avoid palette collisions", () => {

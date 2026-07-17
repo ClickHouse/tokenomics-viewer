@@ -68,6 +68,8 @@ test("web server serves stored SQLite summary and sessions", async () => {
 
     const absoluteTimeline = await fetch(`${base}/api/timeline?from=2026-07-05&to=2026-07-05`).then((response) => response.json());
     assert.equal(absoluteTimeline.length, 1);
+    const timestampTimeline = await fetch(`${base}/api/timeline?fromAt=2026-07-05T00%3A00%3A00.000Z&toAt=2026-07-06T00%3A00%3A00.000Z`).then((response) => response.json());
+    assert.equal(timestampTimeline.length, 1);
     const reversedRange = await fetch(`${base}/api/timeline?from=2026-07-06&to=2026-07-05`);
     assert.equal(reversedRange.status, 400);
     const mixedRange = await fetch(`${base}/api/timeline?days=1&from=2026-07-05`);
@@ -76,6 +78,8 @@ test("web server serves stored SQLite summary and sessions", async () => {
     assert.equal(invalidRange.status, 400);
     const malformedCalendarRange = await fetch(`${base}/api/timeline?from=2026-99-99`);
     assert.equal(malformedCalendarRange.status, 400);
+    const incompleteTimestampRange = await fetch(`${base}/api/timeline?fromAt=2026-07-05T00%3A00%3A00.000Z`);
+    assert.equal(incompleteTimestampRange.status, 400);
 
     const sessions = await fetch(`${base}/api/sessions`).then((response) => response.json());
     assert.equal(sessions.length, 1);

@@ -19,6 +19,7 @@ test("dashboard summary keeps daily buckets chronological for time-series charts
 
 test("dashboard summary exposes the current local calendar month", () => {
   const report = newReport();
+  report.monthlyCostLimitUsd = 100;
   report.monthly["2026-06"] = statsFixture({ costUsd: 12 });
   report.monthly["2026-07"] = statsFixture({
     requests: 9,
@@ -32,8 +33,15 @@ test("dashboard summary exposes the current local calendar month", () => {
 
   assert.equal(summary.generatedAt, new Date(2026, 6, 17, 12, 0, 0).toISOString());
   assert.equal(summary.currentMonth.name, "2026-07");
+  assert.equal(summary.currentMonth.through, "2026-07-17");
+  assert.equal(summary.currentMonth.startAt, new Date(2026, 6, 1).toISOString());
+  assert.equal(summary.currentMonth.endAt, new Date(2026, 6, 18).toISOString());
   assert.equal(summary.currentMonth.costUsd, 34.5);
   assert.equal(summary.currentMonth.requests, 9);
+  assert.equal(summary.currentMonth.limitUsd, 100);
+  assert.equal(summary.currentMonth.remainingUsd, 65.5);
+  assert.equal(summary.currentMonth.overageUsd, 0);
+  assert.equal(summary.currentMonth.usedRatio, 0.345);
 });
 
 test("dashboard summary returns a zero current month when it has no usage", () => {
@@ -43,6 +51,22 @@ test("dashboard summary returns a zero current month when it has no usage", () =
 
   assert.equal(summary.currentMonth.name, "2026-07");
   assert.equal(summary.currentMonth.costUsd, 0);
+  assert.equal(summary.currentMonth.limitUsd, null);
+  assert.equal(summary.currentMonth.remainingUsd, null);
+  assert.equal(summary.currentMonth.overageUsd, null);
+  assert.equal(summary.currentMonth.usedRatio, null);
+});
+
+test("dashboard summary reports monthly limit overage without a negative remainder", () => {
+  const report = newReport();
+  report.monthlyCostLimitUsd = 100;
+  report.monthly["2026-07"] = statsFixture({ costUsd: 125 });
+
+  const summary = webSummary(report, defaultOptions({ now: new Date(2026, 6, 17, 12, 0, 0) }));
+
+  assert.equal(summary.currentMonth.remainingUsd, 0);
+  assert.equal(summary.currentMonth.overageUsd, 25);
+  assert.equal(summary.currentMonth.usedRatio, 1.25);
 });
 
 test("dashboard serves compact 15-minute timelines separately from the summary", () => {
@@ -240,7 +264,7 @@ test("dashboard html replaces sessions with a zoomable project canvas", () => {
   assert.match(html, /drawSharedSelection/);
   assert.match(html, /bindSharedMixCanvas\(projectChart\)/);
   assert.match(html, /pinnedIndex: null/);
-  assert.match(html, /summaryRow: \{ name: 'Total'/);
+  assert.match(html, /summaryRow:\s*\{\s*name: 'Total'/);
   assert.match(html, /pinOnClick: true/);
   assert.match(html, /row\.name === 'Total'/);
   assert.match(html, /chart\.pinnedIndex =/);
@@ -260,6 +284,7 @@ test("dashboard exposes a database-backed pricing settings editor", () => {
   const html = dashboardHtml();
 
   assert.match(html, /id="pricing-settings"/);
+  assert.match(html, /id="setting-monthly-cost-limit"/);
   assert.match(html, /id="pricing-table"/);
   assert.match(html, /id="save-pricing"/);
   assert.match(html, /\/api\/configuration/);
@@ -307,6 +332,11 @@ test("dashboard html exposes per-chart relative and absolute date filters with a
   assert.match(html, /Wheel: zoom at pointer/);
   assert.doesNotMatch(html, /token-resolution-controls/);
   assert.doesNotMatch(html, /project-resolution-controls/);
+  assert.match(html, /id="token-relative-range"[\s\S]*option value="month">MTD/);
+  assert.match(html, /id="project-relative-range"[\s\S]*option value="month">MTD/);
+  assert.match(html, /id="model-relative-range"[\s\S]*option value="month">MTD/);
+  assert.match(html, /config\.summaryRow \|\| row/);
+  assert.match(html, /visibleDomainLabel\(chart\.domain, resolution, Boolean\(config\.localCalendarRange\)\)/);
   assert.doesNotMatch(html, /data-mix-mode=/);
   assert.match(html, /TokenomicsTimeline\.chooseAdaptiveResolution/);
   assert.match(html, /TokenomicsTimeline\.zoomDomain/);
@@ -341,7 +371,10 @@ test("Daily Token Flow value text includes total tokens and total USD cost", () 
 test("Cost KPI shows all-time and current calendar month spend", () => {
   const html = dashboardHtml();
 
-  assert.match(html, /card\('Cost',[\s\S]*summary\.total\.costUsd[\s\S]*This month[\s\S]*summary\.currentMonth\?\.costUsd/);
+  assert.match(html, /card\('Cost',[\s\S]*summary\.total\.costUsd[\s\S]*currentMonthCostMeta\(summary\.currentMonth\)/);
+  assert.match(html, /month\.remainingUsd[\s\S]*left/);
+  assert.match(html, /month\.overageUsd[\s\S]*over/);
+  assert.match(html, /\^\\d\{4\}-\\d\{2\}\$[\s\S]*month: 'short'[\s\S]*timeZone: 'UTC'/);
 });
 
 test("dashboard html exposes the operational overview layout", () => {

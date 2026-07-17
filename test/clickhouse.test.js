@@ -292,10 +292,13 @@ test("ClickHouse configuration revisions publish marker-last and reject stale wr
     const initial = await loadConfiguration(options);
     const edited = structuredClone(initial);
     edited.settings.regionalMultiplier = 1.1;
+    edited.settings.monthlyCostLimitUsd = 10_000;
     const saved = await saveConfiguration(options, edited);
 
     assert.notEqual(saved.revision, initial.revision);
-    assert.equal((await loadConfiguration(options)).settings.regionalMultiplier, 1.1);
+    const reloaded = await loadConfiguration(options);
+    assert.equal(reloaded.settings.regionalMultiplier, 1.1);
+    assert.equal(reloaded.settings.monthlyCostLimitUsd, 10_000);
     await assert.rejects(saveConfiguration(options, edited), /configuration revision conflict/);
     const settingsInsert = mock.requests.findIndex((request) => request.query.startsWith("INSERT INTO analytics_settings"));
     const pricingInsert = mock.requests.findIndex((request) => request.query.startsWith("INSERT INTO pricing_catalog"));
