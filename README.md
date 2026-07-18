@@ -261,6 +261,9 @@ the selected database.
 
 In `Settings`, you can:
 
+- select a `Work API` profile for estimated billed cost and an optional monthly
+  USD limit, or a `Home Subscription` profile for observed quota windows and
+  API-equivalent list-price economics;
 - edit per-million-token input, cache-write, cache-read, and output rates;
 - add providers and models;
 - choose exact, prefix, or dated-snapshot model matching;
@@ -270,7 +273,17 @@ In `Settings`, you can:
 Saves use optimistic revisions. SQLite derives new costs from normalized rows;
 ClickHouse creates a compact revisioned cost overlay with one `INSERT SELECT`
 and publishes the configuration marker last. Neither backend rereads session
-files after a pricing-only change.
+files after a pricing-only change. Profile-name, profile-mode, and monthly-limit
+changes do not alter prices, so they reuse the current pricing revision and do
+not create a new ClickHouse cost overlay.
+
+`API Cost` is the estimated billed amount for an API profile. `API Equivalent`
+applies the same active catalog to subscription usage as a counterfactual value;
+it is not an invoice. Subscription windows are shown only when the provider
+reports them, and per-quota-point projections require near-complete pricing and
+time coverage. The current frontier supports one usage profile per database;
+mixed local and work sources require separate databases until source-level
+profile assignment is implemented.
 
 Custom providers can be priced only when an ingested record contains the same
 provider slug. Adding a catalog row cannot infer provider identity missing from

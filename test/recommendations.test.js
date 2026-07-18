@@ -95,3 +95,43 @@ test("unpriced recommendation omits synthetic model identifiers", () => {
   assert.match(recommendation.action, /unknown-real-model/);
   assert.doesNotMatch(recommendation.action, /synthetic/);
 });
+
+test("subscription recommendations report quota pressure without inventing model savings", () => {
+  const report = newReport();
+  report.total = statsFixture({ requests: 1_000, pricedRequests: 950, costUsd: 300 });
+  const recommendations = buildRecommendations(report, {
+    usageProfile: { id: "home", name: "Home Subscription", mode: "subscription" },
+    subscriptionWindows: [{
+      windowMinutes: 10080,
+      usedPercent: 82,
+      remainingPercent: 18,
+      resetAt: "2026-07-20T12:00:00.000Z",
+      apiEquivalentCostUsd: 280,
+      pricingCoverage: 0.95,
+    }],
+  });
+
+  const recommendation = recommendations.find((item) => item.id === "subscription-quota-pressure-10080");
+  assert.ok(recommendation);
+  assert.match(recommendation.finding, /82%.*18%/);
+  assert.match(recommendation.action, /Luna.*Sol review/);
+  assert.match(recommendation.caveat, /does not prove per-model quota savings/i);
+  assert.equal(recommendation.impactUsd, null);
+});
+
+test("API recommendations project a material monthly budget overrun", () => {
+  const report = newReport();
+  report.monthlyCostLimitUsd = 1_000;
+  report.monthly["2026-07"] = statsFixture({ requests: 1_000, pricedRequests: 1_000, costUsd: 700 });
+
+  const recommendations = buildRecommendations(report, {
+    now: new Date("2026-07-10T12:00:00.000Z"),
+    usageProfile: { id: "work", name: "Work API", mode: "api" },
+  });
+
+  const recommendation = recommendations.find((item) => item.id === "api-monthly-budget-forecast");
+  assert.ok(recommendation);
+  assert.match(recommendation.finding, /projected/i);
+  assert.ok(recommendation.impactUsd > 1_000);
+  assert.match(recommendation.caveat, /current run rate/i);
+});

@@ -35,9 +35,12 @@ manual derivation-version discipline.
 - Project cost UI identifies its basis as an API-equivalent estimate, shows
   unpriced coverage, and separates cache read from cache creation in detail
   while preserving the primary In / Cache / Out visual hierarchy.
-- Supported mutable analytics settings are `openaiContext`, `pricingBasis`, and
-  `regionalMultiplier`. Unknown settings are rejected rather than silently
-  accepted.
+- Supported mutable analytics settings are `openaiContext`, `pricingBasis`,
+  `regionalMultiplier`, `monthlyCostLimitUsd`, and the single-workspace
+  `usageProfile`. Unknown settings are rejected rather than silently accepted.
+- Profile and monthly-limit edits reuse the active internal pricing revision,
+  skip ClickHouse cost overlays, and patch the compatible in-process report.
+  Pricing changes receive a new pricing revision and rederive normalized costs.
 - Provider slugs and model ids are extensible catalog data. A custom row prices
   only source events that already carry the matching provider identity.
 

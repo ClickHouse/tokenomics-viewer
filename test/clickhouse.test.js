@@ -326,6 +326,24 @@ test("ClickHouse pricing overlay failure leaves the previous configuration visib
   });
 });
 
+test("ClickHouse profile-only configuration changes reuse pricing overlays", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_profile_test" });
+    const initial = await loadConfiguration(options);
+    const edited = structuredClone(initial);
+    edited.settings.usageProfile = { id: "home", name: "Home Subscription", mode: "subscription" };
+    const before = mock.requests.length;
+    const saved = await saveConfiguration(options, edited);
+    const requests = mock.requests.slice(before);
+
+    assert.notEqual(saved.revision, initial.revision);
+    assert.equal(saved.settings.pricingRevision, initial.settings.pricingRevision);
+    assert.equal(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")), false);
+    assert.equal(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")), false);
+  });
+});
+
 test("ClickHouse fork pre-scan excludes unchanged sources", async () => {
   const jsonl = createSessionFile({ rows: 1 });
   const mock = createClickHouseServer();
@@ -615,6 +633,11 @@ test("ClickHouse report pins one committed generation across every query", async
   assert.doesNotMatch(quantileQuery, /quantileTDigestIf/);
   const usageStatsQuery = mock.requests.find((request) => request.query.includes("quarterHourlyProviderModels"))?.query;
   assert.ok(usageStatsQuery);
+  const rateLimitQuery = mock.requests.find((request) => request.query.includes("ignoredNonMonotonic"))?.query;
+  assert.ok(rateLimitQuery);
+  assert.match(rateLimitQuery, /AND same_window/);
+  assert.match(rateLimitQuery, /argMaxIf\(used_percent[^\n]+ignored_non_monotonic = 0\)/);
+  assert.match(rateLimitQuery, /maxIf\(timestamp_ms, ignored_non_monotonic = 0\)/);
   assert.match(usageStatsQuery, /toStartOfInterval\(parseDateTimeBestEffortOrNull\(timestamp\), INTERVAL 15 MINUTE\)/);
   assert.match(usageStatsQuery, /projectQuarterHourlyProviderModels/);
 });

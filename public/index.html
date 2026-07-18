@@ -43,6 +43,16 @@
     .value { font-size:22px; font-weight:700; margin-top:3px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
     .card-meta { color:var(--muted); font-size:12px; margin-top:2px; font-variant-numeric:tabular-nums; }
     .token-card .value { font-size:16px; white-space:nowrap; }
+    .quota-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; }
+    .quota-item { min-width:0; border:1px solid var(--line); border-radius:6px; padding:12px; }
+    .quota-head, .quota-metric, .quota-model-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .quota-head strong, .quota-metric strong { font-variant-numeric:tabular-nums; }
+    .quota-track { height:8px; margin:9px 0; background:var(--soft); overflow:hidden; }
+    .quota-fill { display:block; height:100%; background:var(--accent); }
+    .quota-meta { color:var(--muted); font-size:12px; }
+    .quota-models { margin-top:9px; padding-top:7px; border-top:1px solid var(--line); }
+    .quota-model-row { padding:3px 0; font-size:12px; }
+    .quota-model-row span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:8px; }
     .panel-title-stack { display:grid; gap:6px; min-width:0; }
     .chart-head-meta { display:grid; justify-items:end; gap:8px; min-width:0; }
@@ -166,6 +176,10 @@
   </header>
   <main>
     <section class="kpi-band" id="overview-section"><div class="cards" id="cards"></div></section>
+    <section class="is-hidden" id="subscription-limits">
+      <div class="panel-head"><div class="panel-title-stack"><h2>Subscription Limits</h2><div class="muted" id="subscription-limits-summary"></div></div></div>
+      <div class="quota-grid" id="subscription-limits-grid"></div>
+    </section>
     <section id="recommendations-section">
       <div class="panel-head"><h2>Recommended Actions</h2><div class="muted" id="recommendations-summary"></div></div>
       <div class="recommendation-list" id="recommendations-list"></div>
@@ -272,6 +286,12 @@
         </div>
       </div>
       <div class="settings-grid">
+        <label class="settings-field">Usage profile
+          <select id="setting-usage-profile-mode"><option value="api">Work API</option><option value="subscription">Home Subscription</option></select>
+        </label>
+        <label class="settings-field">Profile name
+          <input id="setting-usage-profile-name" type="text" maxlength="80">
+        </label>
         <label class="settings-field">OpenAI context pricing
           <select id="setting-openai-context"><option value="auto">Auto</option><option value="short">Short</option><option value="long">Long</option></select>
         </label>
@@ -281,7 +301,7 @@
         <label class="settings-field">Global rate multiplier
           <input id="setting-regional-multiplier" type="number" min="0.5" max="2" step="0.01" inputmode="decimal">
         </label>
-        <label class="settings-field">Monthly cost limit (USD)
+        <label class="settings-field" id="monthly-cost-limit-field">Monthly cost limit (USD)
           <input id="setting-monthly-cost-limit" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Not set">
         </label>
       </div>
@@ -347,6 +367,47 @@
         : formatUsdCompact(month.remainingUsd || 0) + ' left';
       return label + ' ' + spend + ' / ' + formatUsdCompact(month.limitUsd) +
         ' · ' + formatPct(month.usedRatio || 0) + ' used · ' + distance;
+    }
+
+    function quotaWindowLabel(minutes) {
+      if (minutes === 300) return '5-hour window';
+      if (minutes === 10080) return 'Weekly window';
+      if (minutes % 1440 === 0) return (minutes / 1440) + '-day window';
+      if (minutes % 60 === 0) return (minutes / 60) + '-hour window';
+      return minutes + '-minute window';
+    }
+
+    function renderSubscriptionWindows(summary) {
+      const section = document.getElementById('subscription-limits');
+      const windows = summary.subscriptionWindows || [];
+      const subscription = summary.costSemantics === 'api-equivalent';
+      section.classList.toggle('is-hidden', !subscription);
+      if (!subscription) return;
+      document.getElementById('subscription-limits-summary').textContent =
+        (summary.usageProfile?.name || 'Subscription') + ' · API list-price equivalent, not billed spend';
+      const grid = document.getElementById('subscription-limits-grid');
+      if (!windows.length) {
+        grid.innerHTML = '<div class="muted">No quota window is currently reported by the provider.</div>';
+        return;
+      }
+      grid.innerHTML = windows.map(window => {
+        const used = Number.isFinite(window.usedPercent) ? window.usedPercent : 0;
+        const reset = window.resetAt ? 'Resets ' + new Date(window.resetAt).toLocaleString() : 'Reset time not reported';
+        const coverage = Number.isFinite(window.pricingCoverage) ? formatPct(window.pricingCoverage) + ' priced' : 'No priced requests observed';
+        const timeCoverage = Number.isFinite(window.timeCoverage) ? formatPct(window.timeCoverage) + ' time coverage' : 'Unknown time coverage';
+        const unit = Number.isFinite(window.apiEquivalentPerQuotaPointUsd)
+          ? formatUsdCompact(window.apiEquivalentPerQuotaPointUsd) + ' API eq / quota point'
+          : 'Per-point estimate unavailable';
+        const models = (window.models || []).slice(0, 6).map(model =>
+          '<div class="quota-model-row"><span title="' + esc(model.name) + '">' + esc(model.name) + '</span><strong>' + esc(formatUsdCompact(model.costUsd || 0)) + '</strong></div>'
+        ).join('');
+        return '<div class="quota-item">' +
+          '<div class="quota-head"><strong>' + esc(quotaWindowLabel(window.windowMinutes)) + '</strong><strong>' + esc(used.toFixed(0) + '% used') + '</strong></div>' +
+          '<div class="quota-track" aria-label="' + esc(used.toFixed(0) + '% quota used') + '"><span class="quota-fill" style="width:' + Math.max(0, Math.min(100, used)).toFixed(1) + '%"></span></div>' +
+          '<div class="quota-metric"><span>API equivalent</span><strong>' + esc(formatUsdCompact(window.apiEquivalentCostUsd || 0)) + '</strong></div>' +
+          '<div class="quota-meta">' + esc(reset + ' · ' + coverage + ' · ' + timeCoverage + ' · ' + unit) + '</div>' +
+          (models ? '<div class="quota-models">' + models + '</div>' : '') + '</div>';
+      }).join('');
     }
 
     function costMix(stats = {}) {
@@ -1631,13 +1692,19 @@
       const updated = document.getElementById('updated');
       updated.textContent = 'Updated just now';
       updated.title = new Date(summary.generatedAt).toLocaleString();
+      const subscription = summary.costSemantics === 'api-equivalent';
+      const costLabel = subscription ? 'API Equivalent' : 'API Cost';
+      const costMeta = subscription
+        ? (summary.usageProfile?.name || 'Subscription') + ' · Standard/custom list prices · Not billed'
+        : currentMonthCostMeta(summary.currentMonth);
       document.getElementById('cards').innerHTML = [
-        card('Cost', formatUsdCompact(summary.total.costUsd || 0), '', currentMonthCostMeta(summary.currentMonth)),
+        card(costLabel, formatUsdCompact(summary.apiEquivalentCostUsd || 0), '', costMeta),
         card('Requests', formatTokenCount(summary.total.requests || 0)),
         card('Input Tokens', segmentCardText(summary.total, 'input'), 'token-card'),
         card('Cache Tokens', segmentCardText(summary.total, 'cache'), 'token-card'),
         card('Output Tokens', segmentCardText(summary.total, 'output'), 'token-card'),
       ].join('');
+      renderSubscriptionWindows(summary);
       for (const range of Object.values(timelineRanges)) {
         range.monthStartAt = summary.currentMonth?.startAt || '';
         range.monthEndAt = summary.currentMonth?.endAt || '';
@@ -1797,10 +1864,14 @@
 
     function renderPricingEditor() {
       if (!configurationState) return;
+      const usageProfile = configurationState.settings.usageProfile || { id: 'default', name: 'Work API', mode: 'api' };
+      document.getElementById('setting-usage-profile-mode').value = usageProfile.mode;
+      document.getElementById('setting-usage-profile-name').value = usageProfile.name;
       document.getElementById('setting-openai-context').value = configurationState.settings.openaiContext;
       document.getElementById('setting-pricing-basis').value = configurationState.settings.pricingBasis;
       document.getElementById('setting-regional-multiplier').value = configurationState.settings.regionalMultiplier;
       document.getElementById('setting-monthly-cost-limit').value = configurationState.settings.monthlyCostLimitUsd ?? '';
+      updateUsageProfileEditor();
       const table = document.getElementById('pricing-table');
       table.innerHTML =
         '<thead><tr><th>Provider</th><th>Model</th><th>Match</th><th>Variant</th><th>Effective from</th><th>Effective until</th><th>Input</th><th>Cache 5m write</th><th>Cache 30m write</th><th>Cache 1h write</th><th>Cache read</th><th>Output</th><th>Source</th><th></th></tr></thead>' +
@@ -1826,6 +1897,7 @@
 
     function configurationFromEditor() {
       const monthlyCostLimit = document.getElementById('setting-monthly-cost-limit').value.trim();
+      const usageProfileMode = document.getElementById('setting-usage-profile-mode').value;
       const prices = [...document.querySelectorAll('#pricing-table tbody tr')].map(row => {
         const result = {};
         row.querySelectorAll('[data-price-field]').forEach(input => {
@@ -1843,7 +1915,12 @@
           openaiContext: document.getElementById('setting-openai-context').value,
           pricingBasis: document.getElementById('setting-pricing-basis').value,
           regionalMultiplier: Number(document.getElementById('setting-regional-multiplier').value),
-          monthlyCostLimitUsd: monthlyCostLimit === '' ? null : Number(monthlyCostLimit),
+          monthlyCostLimitUsd: usageProfileMode === 'api' && monthlyCostLimit !== '' ? Number(monthlyCostLimit) : null,
+          usageProfile: {
+            id: configurationState.settings.usageProfile?.id || 'default',
+            name: document.getElementById('setting-usage-profile-name').value.trim(),
+            mode: usageProfileMode,
+          },
         },
         prices,
       };
@@ -1873,12 +1950,23 @@
         configurationState = body.configuration;
         configurationRequiresSync = Boolean(body.requiresSync);
         renderPricingEditor();
+        await loadSummary();
       } catch (error) {
         renderConfigurationStatus(error.message, true);
         console.error(error);
       } finally {
         button.disabled = false;
       }
+    }
+
+    function updateUsageProfileEditor() {
+      const subscription = document.getElementById('setting-usage-profile-mode').value === 'subscription';
+      const limit = document.getElementById('setting-monthly-cost-limit');
+      limit.disabled = subscription;
+      if (subscription) limit.value = '';
+      document.getElementById('monthly-cost-limit-field').title = subscription
+        ? 'Monthly USD budgets apply only to API profiles.'
+        : '';
     }
 
     function shortSource(value) {
@@ -2103,6 +2191,7 @@
     document.getElementById('save-pricing').addEventListener('click', () => {
       savePricingEditor();
     });
+    document.getElementById('setting-usage-profile-mode').addEventListener('change', updateUsageProfileEditor);
     document.getElementById('add-price').addEventListener('click', () => {
       if (!configurationState) return;
       configurationState = configurationFromEditor();

@@ -69,6 +69,48 @@ test("dashboard summary reports monthly limit overage without a negative remaind
   assert.equal(summary.currentMonth.usedRatio, 1.25);
 });
 
+test("subscription summary separates API equivalent from billed spend and exposes observed windows", () => {
+  const report = newReport();
+  report.usageProfile = { id: "home", name: "Home Subscription", mode: "subscription" };
+  report.total = statsFixture({ requests: 10, pricedRequests: 8, costUsd: 12 });
+  report.rateLimits.windows["codex/codex:primary_10080m"] = {
+    agent: "codex",
+    limitId: "codex",
+    kind: "primary",
+    windowMinutes: 10080,
+    latestUsedPercent: 40,
+    latestRemainingPercent: 60,
+    latestAt: "2026-07-17T12:00:00.000Z",
+    latestResetAt: Date.parse("2026-07-20T12:00:00.000Z") / 1000,
+  };
+  report.quarterHourly["2026-07-13T12:00Z"] = statsFixture({ requests: 5, pricedRequests: 4, costUsd: 3 });
+  report.quarterHourly["2026-07-17T11:45Z"] = statsFixture({ requests: 5, pricedRequests: 4, costUsd: 5 });
+  report.quarterHourlyProviderModels["2026-07-13T12:00Z"] = {
+    openai: { "gpt-5.6-luna": statsFixture({ requests: 5, pricedRequests: 4, costUsd: 3 }) },
+  };
+  report.quarterHourlyProviderModels["2026-07-17T11:45Z"] = {
+    openai: { "gpt-5.6-sol": statsFixture({ requests: 5, pricedRequests: 4, costUsd: 5 }) },
+  };
+
+  const summary = webSummary(report, defaultOptions({ now: new Date("2026-07-17T12:00:00.000Z") }));
+
+  assert.deepEqual(summary.usageProfile, report.usageProfile);
+  assert.equal(summary.costSemantics, "api-equivalent");
+  assert.equal(summary.billedCostUsd, null);
+  assert.equal(summary.apiEquivalentCostUsd, 12);
+  assert.equal(summary.currentMonth.limitUsd, null);
+  assert.equal(summary.subscriptionWindows.length, 1);
+  assert.equal(summary.subscriptionWindows[0].windowMinutes, 10080);
+  assert.equal(summary.subscriptionWindows[0].usedPercent, 40);
+  assert.equal(summary.subscriptionWindows[0].apiEquivalentCostUsd, 8);
+  assert.equal(summary.subscriptionWindows[0].pricingCoverage, 0.8);
+  assert.deepEqual(summary.subscriptionWindows[0].models.map((row) => [row.name, row.costUsd]), [
+    ["openai/gpt-5.6-sol", 5],
+    ["openai/gpt-5.6-luna", 3],
+  ]);
+  assert.equal(summary.subscriptionWindows.some((window) => window.windowMinutes === 300), false);
+});
+
 test("dashboard serves compact 15-minute timelines separately from the summary", () => {
   const report = newReport();
   report.quarterHourly["2026-01-02T12:00Z"] = statsFixture({ costUsd: 3 });
@@ -294,6 +336,17 @@ test("dashboard exposes a database-backed pricing settings editor", () => {
   assert.doesNotMatch(html, /data-section-target="pricing-settings"/);
 });
 
+test("dashboard exposes typed API and subscription usage profile controls", () => {
+  const html = dashboardHtml();
+
+  assert.match(html, /id="setting-usage-profile-mode"/);
+  assert.match(html, /id="setting-usage-profile-name"/);
+  assert.match(html, /id="subscription-limits"/);
+  assert.match(html, /summary\.costSemantics === 'api-equivalent'/);
+  assert.match(html, /renderSubscriptionWindows\(summary\)/);
+  assert.match(html, /await loadSummary\(\)/);
+});
+
 test("dashboard html exposes per-chart relative and absolute date filters with adaptive resolution", () => {
   const html = dashboardHtml();
 
@@ -368,10 +421,12 @@ test("Daily Token Flow value text includes total tokens and total USD cost", () 
   assert.match(chartSource, /valueText: row =>[\s\S]*formatUsdCompact\(row\.costUsd \|\| 0\)/);
 });
 
-test("Cost KPI shows all-time and current calendar month spend", () => {
+test("Cost KPI distinguishes API spend from subscription API equivalent", () => {
   const html = dashboardHtml();
 
-  assert.match(html, /card\('Cost',[\s\S]*summary\.total\.costUsd[\s\S]*currentMonthCostMeta\(summary\.currentMonth\)/);
+  assert.match(html, /costLabel = subscription \? 'API Equivalent' : 'API Cost'/);
+  assert.match(html, /summary\.apiEquivalentCostUsd/);
+  assert.match(html, /currentMonthCostMeta\(summary\.currentMonth\)/);
   assert.match(html, /month\.remainingUsd[\s\S]*left/);
   assert.match(html, /month\.overageUsd[\s\S]*over/);
   assert.match(html, /\^\\d\{4\}-\\d\{2\}\$[\s\S]*month: 'short'[\s\S]*timeZone: 'UTC'/);

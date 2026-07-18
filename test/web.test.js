@@ -245,6 +245,63 @@ test("configuration API is readable but loopback and action-header protected for
   }
 });
 
+test("profile-only configuration writes patch the report cache without rebuilding analytics", async () => {
+  const configuration = {
+    revision: "profile-a",
+    settings: {
+      openaiContext: "auto",
+      pricingBasis: "standard",
+      pricingRevision: "prices-a",
+      regionalMultiplier: 1,
+      monthlyCostLimitUsd: null,
+      usageProfile: { id: "default", name: "Work API", mode: "api" },
+    },
+    prices: [],
+  };
+  let reportBuilds = 0;
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => {
+      reportBuilds += 1;
+      return newReport();
+    },
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-profile-fast-path.sqlite"),
+    loadConfiguration: async () => configuration,
+    saveConfiguration: async (_options, next) => ({
+      ...next,
+      revision: "profile-b",
+      settings: { ...next.settings, pricingRevision: "prices-a" },
+    }),
+  });
+  const initialReport = {
+    ...newReport(),
+    configurationRevision: "profile-a",
+    pricingRevision: "prices-a",
+  };
+  const server = await web.startWebServer(defaultOptions({
+    preloadedReport: initialReport,
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    const updated = structuredClone(configuration);
+    updated.settings.usageProfile = { id: "home", name: "Home Subscription", mode: "subscription" };
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const response = await fetch(`${base}/api/configuration`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-tokenomics-action": "configuration" },
+      body: JSON.stringify(updated),
+    });
+
+    assert.equal(response.status, 200);
+    const summary = await fetch(`${base}/api/summary`).then((result) => result.json());
+    assert.equal(reportBuilds, 0);
+    assert.equal(summary.configurationRevision, "profile-b");
+    assert.equal(summary.usageProfile.mode, "subscription");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("sync cannot start while a configuration save is pending", async () => {
   let releaseSave;
   let saveStarted;

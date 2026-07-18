@@ -20,6 +20,12 @@ test("default configuration exposes a validated editable pricing catalog", () =>
   assert.equal(configuration.settings.pricingBasis, "standard");
   assert.equal(configuration.settings.regionalMultiplier, 1);
   assert.equal(configuration.settings.monthlyCostLimitUsd, null);
+  assert.equal(configuration.settings.pricingRevision, "packaged-1");
+  assert.deepEqual(configuration.settings.usageProfile, {
+    id: "default",
+    name: "Work API",
+    mode: "api",
+  });
   assert.ok(configuration.prices.some((row) => row.provider === "openai" && row.model === "gpt-5.6-luna" && row.variant === "short"));
   assert.ok(configuration.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-4-8"));
   assert.deepEqual(normalizeConfiguration(configuration), configuration);
@@ -94,6 +100,39 @@ test("configuration preserves an optional monthly cost limit", () => {
   assert.equal(normalizeConfiguration(configuration).settings.monthlyCostLimitUsd, 10_000);
 });
 
+test("legacy configuration receives the default API usage profile", () => {
+  const configuration = defaultConfiguration();
+  delete configuration.settings.usageProfile;
+  delete configuration.settings.pricingRevision;
+
+  const normalized = normalizeConfiguration(configuration);
+  assert.deepEqual(normalized.settings.usageProfile, {
+    id: "default",
+    name: "Work API",
+    mode: "api",
+  });
+  assert.equal(normalized.settings.pricingRevision, configuration.revision);
+});
+
+test("configuration validates usage profile billing semantics", () => {
+  const unsupported = defaultConfiguration();
+  unsupported.settings.usageProfile.mode = "hybrid";
+  assert.throws(() => normalizeConfiguration(unsupported), /usageProfile mode must be api or subscription/);
+
+  const unnamed = defaultConfiguration();
+  unnamed.settings.usageProfile.name = " ";
+  assert.throws(() => normalizeConfiguration(unnamed), /usageProfile name must be non-empty/);
+
+  const subscriptionBudget = defaultConfiguration();
+  subscriptionBudget.settings.usageProfile = {
+    id: "home",
+    name: "Home Subscription",
+    mode: "subscription",
+  };
+  subscriptionBudget.settings.monthlyCostLimitUsd = 100;
+  assert.throws(() => normalizeConfiguration(subscriptionBudget), /monthlyCostLimitUsd is only supported for API profiles/);
+});
+
 test("custom providers and models use generic database pricing rows", () => {
   const configuration = defaultConfiguration();
   configuration.prices.push({
@@ -164,4 +203,17 @@ test("SQLite configuration revisions round-trip and reject stale writers", async
   assert.equal(reloaded.settings.regionalMultiplier, 1.1);
   assert.equal(reloaded.settings.monthlyCostLimitUsd, 10_000);
   await assert.rejects(saveConfiguration(options, edited), /configuration revision conflict/);
+});
+
+test("SQLite profile-only configuration changes preserve the backend pricing revision", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-profile-configuration-test-"));
+  const options = defaultOptions({ db: Path.join(tmp, "tokenomics.sqlite"), dbEngine: "sqlite" });
+  const initial = await loadConfiguration(options);
+  const edited = structuredClone(initial);
+  delete edited.settings.pricingRevision;
+  edited.settings.usageProfile = { id: "home", name: "Home Subscription", mode: "subscription" };
+
+  const saved = await saveConfiguration(options, edited);
+  assert.notEqual(saved.revision, initial.revision);
+  assert.equal(saved.settings.pricingRevision, initial.settings.pricingRevision);
 });
