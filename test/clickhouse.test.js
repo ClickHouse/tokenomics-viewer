@@ -225,7 +225,7 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
       }
 
       response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      if (query.includes("FROM usage_events") && query.includes("UNION ALL")) {
+      if (query.includes("FROM usage_events") && query.includes("GROUP BY GROUPING SETS")) {
         const generationId = url.searchParams.get("param_generation");
         const usageRows = visibleRows("usage_events", generationId).length;
         response.end(`${JSON.stringify({
@@ -438,9 +438,12 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     const alter = queries.find((query) => query.trim().startsWith("ALTER TABLE usage_events"));
     assert.ok(alter, "long ALTER TABLE SQL should be observed from the request body");
     assert.match(alter, /ADD COLUMN IF NOT EXISTS visible_chars_per_token/);
-    const usageStatsQuery = queries.find((query) => query.includes("FROM usage_events") && query.includes("UNION ALL"));
-    assert.match(usageStatsQuery, /'providerModelEffortDaily' AS bucket/);
-    assert.match(usageStatsQuery, /GROUP BY provider, model, effort, date_key/);
+    const usageStatsQuery = queries.find((query) => query.includes("FROM usage_events") && query.includes("GROUP BY GROUPING SETS"));
+    assert.ok(usageStatsQuery);
+    assert.match(usageStatsQuery, /'providerModelEffortDaily'/);
+    assert.match(usageStatsQuery, /\(provider, model, effort, date_key\)/);
+    assert.equal((usageStatsQuery.match(/FROM usage_events AS raw/g) || []).length, 1);
+    assert.doesNotMatch(usageStatsQuery, /UNION ALL/);
     assert.equal(mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
     assert.equal(mock.inserts.telemetry_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
     assert.match(mock.inserts.telemetry_events[0].body, /token_count/);
@@ -640,8 +643,15 @@ test("ClickHouse report pins one committed generation across every query", async
   assert.doesNotMatch(quantileQuery, /quantileTDigestIf/);
   const usageStatsQuery = mock.requests.find((request) => request.query.includes("quarterHourlyProviderModels"))?.query;
   assert.ok(usageStatsQuery);
-  const rateLimitQuery = mock.requests.find((request) => request.query.includes("ignoredNonMonotonic"))?.query;
+  assert.match(usageStatsQuery, /GROUP BY GROUPING SETS/);
+  assert.doesNotMatch(usageStatsQuery, /UNION ALL/);
+  const rateLimitQueries = mock.requests.filter((request) => request.query.includes("repriced_samples AS"));
+  assert.equal(rateLimitQueries.length, 1, "rate-limit windows and attribution should share one window pass");
+  const rateLimitQuery = rateLimitQueries[0]?.query;
   assert.ok(rateLimitQuery);
+  assert.match(rateLimitQuery, /GROUP BY GROUPING SETS/);
+  assert.match(rateLimitQuery, /\(bucket_type, bucket_key, effort\)/);
+  assert.match(rateLimitQuery, /\(bucket_type, bucket_key, model, effort\)/);
   assert.match(rateLimitQuery, /AND same_window/);
   assert.match(rateLimitQuery, /argMaxIf\(plan_type[^\n]+isNotNull\(plan_type\)/);
   assert.match(rateLimitQuery, /argMaxIf\(used_percent[^\n]+ignored_non_monotonic = 0\)/);
