@@ -138,3 +138,9 @@ test("hover selects the nearest time point by horizontal position", () => {
   assert.equal(timeline.nearestPointByX(points, 111).id, "third");
   assert.equal(timeline.nearestPointByX([], 50), null);
 });
+
+test("timeline ticks tolerate an empty zoom viewport", () => {
+  assert.deepEqual(timeline.tickIndexes(0, 8), []);
+  assert.deepEqual(timeline.tickIndexes(1, 8), [0]);
+  assert.deepEqual(timeline.tickIndexes(4, 2), [0, 2, 3]);
+});

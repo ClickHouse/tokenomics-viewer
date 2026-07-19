@@ -170,6 +170,17 @@
     };
   }
 
+  function tickIndexes(count, target) {
+    if (count <= 0 || target <= 0) return [];
+    if (count === 1) return [0];
+    const steps = Math.min(target, count - 1);
+    const seen = new Set();
+    for (let index = 0; index <= steps; index += 1) {
+      seen.add(Math.round((index * (count - 1)) / steps));
+    }
+    return [...seen].sort((left, right) => left - right);
+  }
+
   function fitDomain(start, end, full, minSpan = QUARTER_HOUR_MS) {
     const fullSpan = Math.max(minSpan, full.end - full.start);
     const span = clamp(Math.max(minSpan, end - start), minSpan, fullSpan);
@@ -228,6 +239,7 @@
     rememberBounded,
     resolutionIntervalMs,
     selectDomain,
+    tickIndexes,
     zoomDomain,
   };
 }));
