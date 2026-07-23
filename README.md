@@ -1,6 +1,6 @@
 # Tokenomics Viewer
 
-Local-first cost and token analytics for Codex and Claude Code, powered by
+Local-first cost and token analytics for Codex, Claude Code, and omp (oh-my-pi), powered by
 ClickHouse. Tokenomics reads local session logs, removes replayed parent traces
 from forked Codex sessions, normalizes usage, and estimates costs from an
 editable pricing catalog.
@@ -86,6 +86,7 @@ Limit discovery to one source. Tokenomics options follow `--`:
 ```bash
 tokenomics-launch -- --source codex
 tokenomics-launch -- --source claude
+tokenomics-launch -- --source omp
 ```
 
 Serve the current ClickHouse database without scanning source files:
@@ -205,8 +206,9 @@ With no explicit paths, Tokenomics discovers:
 - `~/.claude/projects/**/*.jsonl`
 - `${CODEX_HOME:-~/.codex}/sessions/**/*.{jsonl,jsonl.zst}`
 - `${CODEX_HOME:-~/.codex}/archived_sessions/**/*.{jsonl,jsonl.zst,zip}`
+- `${OMP_HOME:-~/.omp/agent}/sessions/**/*.jsonl` (omp/oh-my-pi; also honors `PI_CODING_AGENT_DIR` and `PI_CONFIG_DIR`; override with `--omp-home`)
 
-Use `--source claude`, `--source codex`, `--archives`, or `--no-archives` to
+Use `--source claude`, `--source codex`, `--source omp`, `--archives`, or `--no-archives` to
 control default discovery. ZIP and Zstandard-compressed rollouts are read
 directly without extracting them. If both `.jsonl` and `.jsonl.zst` versions
 exist during a compression transition, the plain file is read once.
