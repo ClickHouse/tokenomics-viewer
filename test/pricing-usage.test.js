@@ -1088,8 +1088,34 @@ test("omp parser pins provider and derives cost from omp pricing (duplicate-time
   const p = pricing.PRICING.omp.models["glm-5.2"];
   const expected = (994 * p.input + 39232 * p.cacheRead + 57 * p.output) / pricing.TOKENS_PER_PRICE_UNIT;
   assert.equal(Number(report.total.costUsd.toFixed(6)), Number(expected.toFixed(6)));
-  // A5: omp's precomputed usage.cost (0.01184272) is NOT trusted.
-  assert.notEqual(Number(report.total.costUsd.toFixed(6)), 0.01184272);
+  // A5: cost is re-derived from our own omp pricing config (the equality above
+  // proves it tracks our rates). With real Z.AI rates this coincides with omp's
+  // logged cost — equality, not inequality, is the correct re-derivation signal.
+});
+
+test("omp cost is re-derived from viewer pricing, not trusted from omp usage.cost (A5)", () => {
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), "omp-cost-rederivation");
+  processLine(JSON.stringify({
+    type: "session", version: 3, id: "s-cost", timestamp: "2026-07-23T00:40:00.000Z", cwd: "/tmp/omp-cost", title: "t",
+  }), 1);
+  // RESEARCH.md §3 gotcha 2: omp's precomputed usage.cost can be all-zero even for
+  // non-zero tokens. The viewer MUST re-derive a non-zero cost from its own omp
+  // pricing config — proving usage.cost is ignored (A5).
+  processLine(JSON.stringify({
+    type: "message", id: "m-cost", timestamp: "2026-07-23T00:42:17.380Z",
+    message: { role: "assistant", content: [] }, provider: "zai", model: "glm-5.2",
+    usage: { input: 1_000_000, output: 500_000, cacheRead: 0, cacheWrite: 0, totalTokens: 1_500_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop", timestamp: 1784767330214,
+  }), 2);
+
+  assert.equal(report.total.requests, 1);
+  const p = pricing.PRICING.omp.models["glm-5.2"];
+  const expected = (1_000_000 * p.input + 500_000 * p.output) / pricing.TOKENS_PER_PRICE_UNIT;
+  assert.ok(expected > 0, "glm-5.2 must carry non-zero pricing");
+  assert.equal(Number(report.total.costUsd.toFixed(6)), Number(expected.toFixed(6)));
+  assert.ok(report.total.costUsd > 0, "viewer re-derives non-zero cost despite omp's all-zero usage.cost");
 });
 
 test("omp pricing resolves known models and flags unknown ones", () => {
