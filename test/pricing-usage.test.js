@@ -1050,3 +1050,56 @@ test("project model aggregation keeps provider identity for equal model ids", ()
   assert.equal(report.projectProviderModels[base.project]["acme-ai"][base.model].requests, 1);
   assert.equal(report.projectModels[base.project][base.model].requests, 2);
 });
+
+test("omp parser pins provider and derives cost from omp pricing (duplicate-timestamp gotcha)", () => {
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), "omp-fixture");
+  processLine(JSON.stringify({
+    type: "session", version: 3, id: "019f8c6a-3c53-7000-ac25-ab8ebe94e943",
+    timestamp: "2026-07-23T00:40:00.339Z", cwd: "/tmp/project-omp", title: "t",
+  }), 1);
+  // Duplicate-timestamp gotcha (RESEARCH.md §3 gotcha 1): the entry-level ISO
+  // timestamp is shadowed by a trailing Unix-ms `timestamp`. After JSON.parse
+  // the ms number wins — proves the §4.5 handling (new Date(<number>) = ms-epoch).
+  processLine(JSON.stringify({
+    type: "message", id: "4f9506d3", parentId: "7d542783",
+    timestamp: "2026-07-23T00:42:17.380Z",
+    message: { role: "assistant", content: [] },
+    api: "anthropic-messages", provider: "zai", model: "glm-5.2",
+    usage: {
+      input: 994, output: 57, cacheRead: 39232, cacheWrite: 0, totalTokens: 40283,
+      cost: { input: 0.0013916, output: 0.0002508, cacheRead: 0.01020032, cacheWrite: 0, total: 0.01184272 },
+    },
+    stopReason: "toolUse", timestamp: 1784767330214, responseId: "msg_x",
+  }), 2);
+
+  assert.equal(report.total.requests, 1);
+  assert.equal(report.total.input, 994);
+  assert.equal(report.total.cacheRead, 39232);
+  assert.equal(report.total.output, 57);
+  assert.equal(report.total.cacheCreate5m, 0);
+  assert.ok(report.providerModels["omp/glm-5.2"]);
+  assert.equal(report.projects["/tmp/project-omp"].requests, 1);
+  // A3: provider is "omp" (NOT "zai"/"unknown") — inferProvider never reached.
+  assert.ok(report.providers["omp"]);
+  assert.equal(report.providers["zai"], undefined);
+  assert.equal(report.providers["unknown"], undefined);
+
+  const p = pricing.PRICING.omp.models["glm-5.2"];
+  const expected = (994 * p.input + 39232 * p.cacheRead + 57 * p.output) / pricing.TOKENS_PER_PRICE_UNIT;
+  assert.equal(Number(report.total.costUsd.toFixed(6)), Number(expected.toFixed(6)));
+  // A5: omp's precomputed usage.cost (0.01184272) is NOT trusted.
+  assert.notEqual(Number(report.total.costUsd.toFixed(6)), 0.01184272);
+});
+
+test("omp pricing resolves known models and flags unknown ones", () => {
+  const p = pricing.PRICING.omp.models["glm-5.2"];
+  const known = calculateCost("omp", "glm-5.2", simpleUsage(1_000_000, 500_000), new Date("2026-07-23T00:42:17.380Z"), pricingOptions);
+  assert.equal(known.known, true);
+  const expectedKnown = (1_000_000 * p.input + 500_000 * p.output) / pricing.TOKENS_PER_PRICE_UNIT;
+  assert.equal(Number(known.amount.toFixed(6)), Number(expectedKnown.toFixed(6)));
+
+  const unknown = calculateCost("omp", "glm-not-a-real-model", simpleUsage(100, 50), new Date("2026-07-23T00:42:17.380Z"), pricingOptions);
+  assert.equal(unknown.known, false);
+  assert.equal(unknown.amount, 0);
+});

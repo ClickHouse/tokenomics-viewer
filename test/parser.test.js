@@ -196,3 +196,60 @@ test("skips exact duplicate last_token_usage snapshots within one turn", () => {
   assert.equal(report.total.cacheRead, 40);
   assert.equal(report.total.output, 20);
 });
+
+test("omp malformed JSON is counted in lenient mode and rejected in strict mode", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-omp-parse-test-"));
+  const ompHome = Path.join(tmp, "omp-home");
+  const sessions = Path.join(ompHome, "sessions", "-tmp-project-omp");
+  fs.mkdirSync(sessions, { recursive: true });
+  fs.writeFileSync(Path.join(sessions, "malformed.jsonl"), [
+    JSON.stringify({ type: "session", version: 3, id: "s1", timestamp: "2026-07-23T00:40:00.000Z", cwd: "/tmp/project-omp", title: "t" }),
+    JSON.stringify({
+      type: "message", id: "m1", timestamp: "2026-07-23T00:42:17.380Z",
+      message: { role: "assistant", content: [] }, provider: "zai", model: "glm-5.2",
+      usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: { total: 0 } },
+      timestamp: 1784767330214,
+    }),
+    "{malformed-json",
+    "",
+  ].join("\n"));
+
+  const lenient = await buildReport(defaultOptions({ source: "omp", home: tmp, ompHome }));
+  assert.equal(lenient.sources.parseErrors, 1);
+  assert.equal(lenient.sessions[0].parseErrors, 1);
+
+  await assert.rejects(
+    () => buildReport(defaultOptions({ source: "omp", home: tmp, ompHome, strictJson: true })),
+    /Invalid JSON in .*malformed\.jsonl:3/,
+  );
+});
+
+test("omp discovery ingests parent transcripts and subagent sidecars (A6)", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-omp-tree-test-"));
+  const ompHome = Path.join(tmp, "omp-home");
+  const slug = Path.join(ompHome, "sessions", "-tmp-project-omp");
+  fs.mkdirSync(slug, { recursive: true });
+  const parentFile = Path.join(slug, "2026-07-23T00-40-00-000Z_019f8c6a.jsonl");
+  const sidecarDir = Path.join(slug, "2026-07-23T00-40-00-000Z_019f8c6a");
+  fs.mkdirSync(sidecarDir, { recursive: true });
+  const sidecarFile = Path.join(sidecarDir, "SubAgent.jsonl");
+
+  const header = (cwd) => JSON.stringify({ type: "session", version: 3, id: cwd.slice(-4), timestamp: "2026-07-23T00:40:00.000Z", cwd, title: "t" });
+  const assistant = () => JSON.stringify({
+    type: "message", id: "m", timestamp: "2026-07-23T00:42:17.380Z",
+    message: { role: "assistant", content: [] }, provider: "zai", model: "glm-5.2",
+    usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: { total: 0 } },
+    timestamp: 1784767330214,
+  });
+
+  fs.writeFileSync(parentFile, [header("/tmp/project-omp"), assistant(), ""].join("\n"));
+  fs.writeFileSync(sidecarFile, [header("/tmp/sidecar-project"), assistant(), ""].join("\n"));
+
+  const report = await buildReport(defaultOptions({ source: "omp", home: tmp, ompHome }));
+  assert.equal(report.sessions.length, 2);
+  assert.equal(report.total.requests, 2);
+  assert.equal(report.providers["omp"].requests, 2);
+  assert.ok(report.providerModels["omp/glm-5.2"]);
+  assert.equal(report.projects["/tmp/project-omp"].requests, 1);
+  assert.equal(report.projects["/tmp/sidecar-project"].requests, 1);
+});
