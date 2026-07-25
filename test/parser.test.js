@@ -197,6 +197,129 @@ test("skips exact duplicate last_token_usage snapshots within one turn", () => {
   assert.equal(report.total.output, 20);
 });
 
+test("tracks thread_settings_applied service-tier transitions per Codex thread", () => {
+  const report = newReport();
+  const processLine = createLineProcessor(
+    report,
+    defaultOptions({ openaiContext: "short" }),
+    "codex-service-tier-transition-fixture",
+  );
+  const tokenCount = (timestamp, input) => ({
+    type: "event_msg",
+    timestamp,
+    payload: {
+      type: "token_count",
+      info: { last_token_usage: { input_tokens: input, output_tokens: input } },
+    },
+  });
+  const settings = (timestamp, service_tier) => ({
+    type: "event_msg",
+    timestamp,
+    payload: {
+      type: "thread_settings_applied",
+      thread_settings: {
+        model: "gpt-5.6-sol",
+        service_tier,
+      },
+    },
+  });
+
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-07-10T00:42:27.000Z",
+    payload: { cwd: "/tmp/service-tier", model_provider: "openai", model: "gpt-5.6-sol" },
+  }), 1);
+  processLine(JSON.stringify(settings("2026-07-10T00:42:28.000Z", "priority")), 2);
+  processLine(JSON.stringify({
+    type: "turn_context",
+    timestamp: "2026-07-10T00:42:29.000Z",
+    payload: { turn_id: "turn-priority", cwd: "/tmp/service-tier", model: "gpt-5.6-sol" },
+  }), 3);
+  processLine(JSON.stringify(tokenCount("2026-07-10T00:42:30.000Z", 100_000)), 4);
+
+  processLine(JSON.stringify(settings("2026-07-10T00:43:00.000Z", "default")), 5);
+  processLine(JSON.stringify({
+    type: "turn_context",
+    timestamp: "2026-07-10T00:43:01.000Z",
+    payload: { turn_id: "turn-default", cwd: "/tmp/service-tier", model: "gpt-5.6-sol" },
+  }), 6);
+  processLine(JSON.stringify(tokenCount("2026-07-10T00:43:02.000Z", 100_000)), 7);
+
+  assert.equal(report._usageEvents.length, 2);
+  assert.equal(report._usageEvents[0].serviceTier, "priority");
+  assert.equal(report._usageEvents[1].serviceTier, "default");
+  assert.equal(report._usageEvents[0].cost.amount, 8.75, "priority Sol uses 2.5x standard short pricing");
+  assert.equal(report._usageEvents[1].cost.amount, 3.5, "default Sol uses standard short pricing");
+  assert.equal(report.total.costUsd, 12.25);
+});
+
+test("forked child without an explicit tier does not inherit parent priority pricing", () => {
+  const report = newReport();
+  const parentSessionId = "019f0000-0000-7000-8000-000000000101";
+  const childSessionId = "019f0000-0000-7000-8000-000000000102";
+  const parentTurnId = "019f0000-0000-7000-8000-000000000103";
+  const childTurnId = "019f0000-0000-7000-8000-000000000104";
+  const processLine = createLineProcessor(
+    report,
+    defaultOptions({
+      openaiContext: "short",
+      codexForkRegistry: {
+        tracesBySession: new Map([[parentSessionId, new Set([`turn:${parentTurnId}`])]]),
+      },
+    }),
+    "codex-service-tier-fork-fixture",
+  );
+
+  const tokenCount = {
+    type: "event_msg",
+    timestamp: "2026-07-10T01:00:03.000Z",
+    payload: {
+      type: "token_count",
+      info: { last_token_usage: { input_tokens: 100_000, output_tokens: 100_000 } },
+    },
+  };
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-07-10T01:00:00.000Z",
+    payload: {
+      id: childSessionId,
+      forked_from_id: parentSessionId,
+      cwd: "/tmp/service-tier-child",
+      model_provider: "openai",
+      model: "gpt-5.6-sol",
+    },
+  }), 1);
+  processLine(JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-07-10T01:00:00.500Z",
+    payload: {
+      type: "thread_settings_applied",
+      thread_settings: { model: "gpt-5.6-sol", service_tier: "priority" },
+    },
+  }), 2);
+  processLine(JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-07-10T01:00:01.000Z",
+    payload: { type: "task_started", turn_id: parentTurnId },
+  }), 3);
+  processLine(JSON.stringify(tokenCount), 4);
+  processLine(JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-07-10T01:00:02.000Z",
+    payload: { type: "task_started", turn_id: childTurnId },
+  }), 5);
+  processLine(JSON.stringify({
+    type: "turn_context",
+    timestamp: "2026-07-10T01:00:02.500Z",
+    payload: { turn_id: childTurnId, cwd: "/tmp/service-tier-child", model: "gpt-5.6-sol" },
+  }), 6);
+  processLine(JSON.stringify({ ...tokenCount, timestamp: "2026-07-10T01:00:03.000Z" }), 7);
+
+  assert.equal(report.total.requests, 1);
+  assert.equal(report._usageEvents[0].cost.amount, 3.5, "missing child tier must remain standard");
+  assert.notEqual(report._usageEvents[0].serviceTier, "priority");
+});
+
 test("omp malformed JSON is counted in lenient mode and rejected in strict mode", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-omp-parse-test-"));
   const ompHome = Path.join(tmp, "omp-home");

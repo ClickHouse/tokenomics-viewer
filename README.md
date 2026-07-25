@@ -60,11 +60,13 @@ command to use. It does not edit shell startup files.
   resource diagnostics.
 - Deterministic recommended actions with evidence, confidence, and caveats.
 - An editable, database-backed provider and model pricing catalog.
+- Codex fast-mode credit-equivalent pricing when a session records its service
+  tier.
 - Codex rate-limit consumption summaries when snapshots are present.
 
 Cost estimates are analytical aids, not billing statements. Subscription usage,
-negotiated rates, batch pricing, and unrecognized models can differ from the
-standard API-equivalent catalog.
+negotiated rates, batch pricing, missing service-tier markers, and unrecognized
+models can differ from the standard API-equivalent catalog.
 
 ## Common Commands
 
@@ -220,6 +222,11 @@ changed files or archive entries replace their previous normalized data. Codex
 fork metadata and replay traces are used to avoid counting inherited parent
 history again in subagent sessions.
 
+All calendar buckets and range boundaries use UTC: day, ISO week, month, year,
+and the existing 15-minute timeline. A version upgrade that changes a derived
+field such as UTC calendar keys or service tier causes one full source reimport;
+later syncs return to normal fingerprint-based incrementality.
+
 ClickHouse source versions are immutable. A sync stages changed sources and a
 complete source manifest, then publishes one global generation marker last.
 Reports pin that generation, so a failed multi-source sync leaves the previous
@@ -333,6 +340,22 @@ treated as total input with cached input as a read subset. Explicit
 `cache_creation_input_tokens` plus `cache_read_input_tokens` records preserve
 cache writes separately. Tokenomics does not invent cache-write volume for
 legacy records that cannot prove it.
+
+For standard pricing, Codex `thread_settings_applied.service_tier=priority`
+applies the documented ChatGPT fast-mode credit multipliers: `2.5x` for
+GPT-5.6 and GPT-5.5, and `2x` for GPT-5.4
+([official fast-mode documentation](https://developers.openai.com/codex/speed)).
+This is deliberately separate from API Priority processing. Missing or unknown
+tiers remain standard-priced instead of silently assuming fast mode. In
+particular, a forked child rollout that omits its own service tier does not
+inherit the parent's tier, so such local logs can understate workspace billing.
+Custom pricing is used as entered and does not receive these packaged
+multipliers.
+
+`codex-auto-review` is included at effective rates of `$2.50` input, `$0.25`
+cached input, and `$15.00` output per million tokens. Those rates are derived
+from an observed OpenAI workspace billing export; OpenAI does not currently
+publish a separate public model-rate page for this internal model id.
 
 omp (oh-my-pi) cost is estimated from the packaged omp pricing catalog using
 official Z.AI (Zhipu AI) GLM rates in USD per million tokens

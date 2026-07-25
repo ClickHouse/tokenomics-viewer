@@ -28,3 +28,19 @@ test("ClickHouse pricing projection encodes editable model ids as data", () => {
   assert.doesNotMatch(sql.matchExpression, /model-'quoted/);
   assert.match(sql.matchExpression, /base64Decode\('/);
 });
+
+test("ClickHouse pricing projection applies packaged fast multipliers from service_tier", () => {
+  const sql = buildClickHouseCostProjection(defaultConfiguration(), { alias: "raw" });
+
+  assert.match(sql.projection, /raw\.service_tier/);
+  assert.match(sql.projection, /= 'priority'/);
+  assert.match(sql.projection, /= 'fast'/);
+  assert.match(sql.projection, /2\.5/);
+  assert.match(sql.projection, /, 2,/);
+
+  const custom = defaultConfiguration();
+  custom.settings.pricingBasis = "custom";
+  custom.settings.pricingRevision = "custom-fast-test";
+  const customSql = buildClickHouseCostProjection(custom, { alias: "raw" });
+  assert.doesNotMatch(customSql.projection, /raw\.service_tier/);
+});
