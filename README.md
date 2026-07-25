@@ -1,6 +1,6 @@
 # Tokenomics Viewer
 
-Local-first cost and token analytics for Codex and Claude Code, powered by
+Local-first cost and token analytics for Codex, Claude Code, and omp (oh-my-pi), powered by
 ClickHouse. Tokenomics reads local session logs, removes replayed parent traces
 from forked Codex sessions, normalizes usage, and estimates costs from an
 editable pricing catalog.
@@ -28,7 +28,7 @@ The installer does not use `sudo` or install npm packages. On the first run it:
 3. Installs a private Node.js 26 runtime when the system Node.js is too old.
 4. Installs `clickhousectl`, selects stable ClickHouse, and starts the named
    `tokenomics` server.
-5. Imports local Codex and Claude Code sessions into ClickHouse.
+5. Imports local Codex, Claude Code, and omp sessions into ClickHouse.
 6. Starts the dashboard on a loopback address and opens it in your browser.
 
 Subsequent launches are one command:
@@ -86,7 +86,10 @@ Limit discovery to one source. Tokenomics options follow `--`:
 ```bash
 tokenomics-launch -- --source codex
 tokenomics-launch -- --source claude
+tokenomics-launch -- --source omp
 ```
+
+The default `--source all` scans Claude Code, Codex, and omp together.
 
 Serve the current ClickHouse database without scanning source files:
 
@@ -205,8 +208,9 @@ With no explicit paths, Tokenomics discovers:
 - `~/.claude/projects/**/*.jsonl`
 - `${CODEX_HOME:-~/.codex}/sessions/**/*.{jsonl,jsonl.zst}`
 - `${CODEX_HOME:-~/.codex}/archived_sessions/**/*.{jsonl,jsonl.zst,zip}`
+- `${OMP_HOME:-~/.omp/agent}/sessions/**/*.jsonl` (omp/oh-my-pi)
 
-Use `--source claude`, `--source codex`, `--archives`, or `--no-archives` to
+Use `--source claude`, `--source codex`, `--source omp`, `--archives`, or `--no-archives` to
 control default discovery. ZIP and Zstandard-compressed rollouts are read
 directly without extracting them. If both `.jsonl` and `.jsonl.zst` versions
 exist during a compression transition, the plain file is read once.
@@ -225,6 +229,27 @@ Pricing revisions are deliberately excluded from source fingerprints. Editing
 a rate or adding a model updates normalized database costs without reopening
 JSONL, ZIP, or Zstandard source files.
 
+### omp (oh-my-pi)
+
+omp is a coding-agent harness that runs Zhipu AI (Z.AI) GLM models. Each omp
+session is one append-only JSONL transcript at
+`~/.omp/agent/sessions/<project-slug>/<ISO-timestamp>_<session-uuid>.jsonl`, with
+one subdirectory per working directory.
+
+The default root is relocatable. Override it with `--omp-home` (or the `OMP_HOME`
+variable), which points at the agent data directory that contains `sessions/`,
+the same role `--codex-home` plays for Codex. omp's native relocation variables
+are also honored: `PI_CODING_AGENT_DIR` moves `~/.omp/agent` outright, and
+`PI_CONFIG_DIR` renames the config root (default `.omp`).
+
+Ingest walks every `.jsonl` file under the sessions tree, so a session's parent
+transcript and omp's own subagent sidecars are both counted. Totals are flat per
+session: each assistant and tool-result line carrying a `usage` block is summed
+into one input, cache-read/write, and output total. omp transcripts carry no
+rate-limit or quota snapshots, and subscription-plan detection is not supported
+for omp, so no rate-limit summaries appear for it (Codex shows rate-limit
+summaries only when its snapshots are present).
+
 ## Dashboard
 
 The dashboard has three modes:
@@ -234,6 +259,10 @@ The dashboard has three modes:
 - `Analyst` adds per-project timelines, the full model/effort table, and Cost &
   Resource Diagnostics.
 - `Settings` edits pricing and analytics configuration.
+
+Each source's usage surfaces under its provider in the model and effort tables.
+omp models appear as `omp/<model>` (for example, `omp/glm-5.2`), next to Codex
+and Claude Code entries.
 
 Token Flow and Project Cost load compact timeline buckets on demand. Hover
 anywhere in a chart to inspect the nearest interval; use the wheel to zoom at
@@ -304,6 +333,15 @@ treated as total input with cached input as a read subset. Explicit
 `cache_creation_input_tokens` plus `cache_read_input_tokens` records preserve
 cache writes separately. Tokenomics does not invent cache-write volume for
 legacy records that cannot prove it.
+
+omp (oh-my-pi) cost is estimated from the packaged omp pricing catalog using
+official Z.AI (Zhipu AI) GLM rates in USD per million tokens
+([source](https://docs.z.ai/guides/overview/pricing)). The catalog covers the
+`glm-4.5`, `glm-4.6`, `glm-4.7`, `glm-5`, `glm-5.1`, and `glm-5.2` models and
+their variants, plus free tiers such as `glm-4.5-flash` and `glm-4.7-flash`.
+omp writes a precomputed cost into each transcript, but Tokenomics ignores it
+and re-derives cost from this catalog so unpriced or repriced models stay
+accurate.
 
 The proposed compressed session store and project-scoped session viewer are not
 implemented. Their intended safety boundary is documented in

@@ -1,11 +1,13 @@
 {
   "name": "tokenomics-viewer",
   "version": "0.0.1",
-  "description": "View token usage, costs, and rate-limit metrics from Codex and Claude Code sessions",
+  "description": "View token usage, costs, and rate-limit metrics from Codex, Claude Code, and omp (oh-my-pi) sessions",
   "keywords": [
     "codex",
     "claude",
     "code",
+    "oh-my-pi",
+    "omp",
     "tokens"
   ],
   "license": "ISC",

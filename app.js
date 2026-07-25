@@ -17,6 +17,7 @@ const {
 } = require("./lib/core/report-model");
 const {
   usageFromClaudeUsage,
+  usageFromOmpUsage,
   usageFromCodexInfo,
 } = require("./lib/core/usage");
 const reportText = require("./lib/report/text");
@@ -118,6 +119,7 @@ module.exports = {
   startWebServer: web.startWebServer,
   syncDatabase: storage.syncDatabase,
   usageFromClaudeUsage,
+  usageFromOmpUsage,
   usageFromCodexInfo,
   writeReport: reportText.writeReport,
 };

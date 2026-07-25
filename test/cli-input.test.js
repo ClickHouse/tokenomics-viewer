@@ -100,7 +100,7 @@ test("main writes final JSON report with per-session metrics", async () => {
 
 test("parseArgs rejects invalid values across the supported validation matrix", () => {
   const invalidCases = [
-    [["--source", "invalid"], "--source must be all, claude, or codex"],
+    [["--source", "invalid"], "--source must be all, claude, codex, or omp"],
     [["--openai-context", "invalid"], "--openai-context must be auto, short, or long"],
     [["--format", "xml"], "--format must be text or json"],
     [["--db-engine", "invalid"], "--db-engine must be sqlite or clickhouse"],
@@ -166,4 +166,30 @@ test("the executable keeps its successful --help behavior", () => {
   assert.equal(result.status, 0);
   assert.equal(result.stderr, "");
   assert.equal(result.stdout, `${cli.helpText()}\n`);
+});
+
+test("omp CLI options wire OMP_HOME, --omp-home, --source omp, and resolveOmpAgentDir", () => {
+  assert.equal(cli.defaultOptions({ OMP_HOME: "/tmp/custom-omp-home" }).ompHome, Path.resolve("/tmp/custom-omp-home"));
+  assert.equal(parseArgs(["--omp-home", "/y", "--source", "omp"]).ompHome, Path.resolve("/y"));
+  assert.equal(parseArgs(["--source", "omp"]).source, "omp");
+  assert.throws(() => parseArgs(["--source", "bogus"]));
+
+  const { resolveOmpAgentDir } = require("../lib/ingest/sources");
+  const home = "/tmp/fake-home";
+  const saveAgent = process.env.PI_CODING_AGENT_DIR;
+  const saveCfg = process.env.PI_CONFIG_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
+  delete process.env.PI_CONFIG_DIR;
+  try {
+    assert.equal(resolveOmpAgentDir(home), Path.join(home, ".omp", "agent"));
+    process.env.PI_CONFIG_DIR = ".omp2";
+    assert.equal(resolveOmpAgentDir(home), Path.join(home, ".omp2", "agent"));
+    process.env.PI_CODING_AGENT_DIR = "/agent";
+    assert.equal(resolveOmpAgentDir(home), Path.resolve("/agent"));
+  } finally {
+    if (saveAgent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = saveAgent;
+    if (saveCfg === undefined) delete process.env.PI_CONFIG_DIR;
+    else process.env.PI_CONFIG_DIR = saveCfg;
+  }
 });
