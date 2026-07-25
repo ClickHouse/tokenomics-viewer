@@ -57,6 +57,26 @@ test("SQLite backend factory creates an empty database and report", () => {
   });
 });
 
+test("SQLite adds service_tier to an existing usage_events table", () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-service-tier-migration-test-"));
+  const dbPath = Path.join(tmp, "tokenomics.sqlite");
+  const backend = createSqliteBackend();
+  backend.buildReportFromDatabase(dbPath, defaultOptions());
+
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec("ALTER TABLE usage_events DROP COLUMN service_tier");
+  legacy.close();
+
+  backend.buildReportFromDatabase(dbPath, defaultOptions());
+  const migrated = new DatabaseSync(dbPath);
+  try {
+    const column = migrated.prepare("SELECT name, dflt_value FROM pragma_table_info('usage_events') WHERE name = 'service_tier'").get();
+    assert.deepEqual({ ...column }, { name: "service_tier", dflt_value: "'unknown'" });
+  } finally {
+    migrated.close();
+  }
+});
+
 test("SQLite fork pre-scan excludes unchanged sources", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-prescan-test-"));
   const jsonl = Path.join(tmp, "session.jsonl");

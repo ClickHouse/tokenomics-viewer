@@ -427,6 +427,7 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     )));
     assert.ok(queries.some((query) => (
       query.includes("CREATE TABLE IF NOT EXISTS usage_events")
+      && query.includes("service_tier LowCardinality(String)")
       && query.includes("CODEC(ZSTD(3))")
       && query.includes("CODEC(Delta, ZSTD(1))")
       && query.includes("CODEC(Gorilla, ZSTD(1))")
@@ -437,14 +438,17 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     )));
     const alter = queries.find((query) => query.trim().startsWith("ALTER TABLE usage_events"));
     assert.ok(alter, "long ALTER TABLE SQL should be observed from the request body");
+    assert.match(alter, /ADD COLUMN IF NOT EXISTS service_tier/);
     assert.match(alter, /ADD COLUMN IF NOT EXISTS visible_chars_per_token/);
     const usageStatsQuery = queries.find((query) => query.includes("FROM usage_events") && query.includes("GROUP BY GROUPING SETS"));
     assert.ok(usageStatsQuery);
     assert.match(usageStatsQuery, /'providerModelEffortDaily'/);
+    assert.match(usageStatsQuery, /'serviceTiers'/);
     assert.match(usageStatsQuery, /\(provider, model, effort, date_key\)/);
     assert.equal((usageStatsQuery.match(/FROM usage_events AS raw/g) || []).length, 1);
     assert.doesNotMatch(usageStatsQuery, /UNION ALL/);
     assert.equal(mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
+    assert.equal(JSON.parse(mock.inserts.usage_events[0].body.trim().split("\n")[0]).service_tier, "unknown");
     assert.equal(mock.inserts.telemetry_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
     assert.match(mock.inserts.telemetry_events[0].body, /token_count/);
     assert.ok(mock.inserts.usage_events.length > 1);

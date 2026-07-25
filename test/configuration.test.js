@@ -20,15 +20,50 @@ test("default configuration exposes a validated editable pricing catalog", () =>
   assert.equal(configuration.settings.pricingBasis, "standard");
   assert.equal(configuration.settings.regionalMultiplier, 1);
   assert.equal(configuration.settings.monthlyCostLimitUsd, null);
-  assert.equal(configuration.settings.pricingRevision, "packaged-1");
+  assert.equal(configuration.settings.pricingRevision, "packaged-2");
   assert.deepEqual(configuration.settings.usageProfile, {
     id: "default",
     name: "Work API",
     mode: "api",
   });
   assert.ok(configuration.prices.some((row) => row.provider === "openai" && row.model === "gpt-5.6-luna" && row.variant === "short"));
+  assert.ok(configuration.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review" && row.variant === "short"));
   assert.ok(configuration.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-4-8"));
   assert.deepEqual(normalizeConfiguration(configuration), configuration);
+});
+
+test("packaged-1 pricing is upgraded with codex-auto-review without replacing persisted rows", () => {
+  const configuration = defaultConfiguration();
+  configuration.revision = "packaged-1";
+  configuration.settings.pricingRevision = "packaged-1";
+  configuration.prices = configuration.prices.filter((row) => row.model !== "codex-auto-review");
+  const luna = configuration.prices.find((row) => (
+    row.provider === "openai" && row.model === "gpt-5.6-luna" && row.variant === "short"
+  ));
+  luna.input = 2;
+
+  const normalized = normalizeConfiguration(configuration);
+
+  assert.equal(normalized.settings.pricingRevision, "packaged-2");
+  assert.equal(normalized.prices.find((row) => row.id === luna.id).input, 2);
+  assert.ok(normalized.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review"));
+});
+
+test("standard edited catalogs get a stable pricing-engine revision and auto-review row", () => {
+  const configuration = defaultConfiguration();
+  configuration.settings.pricingRevision = "edited-catalog-1";
+  configuration.prices = configuration.prices.filter((row) => row.model !== "codex-auto-review");
+
+  const normalized = normalizeConfiguration(configuration);
+
+  assert.match(normalized.settings.pricingRevision, /^packaged-2:[0-9a-f]{32}$/);
+  assert.equal(normalizeConfiguration(normalized).settings.pricingRevision, normalized.settings.pricingRevision);
+  assert.ok(normalized.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review"));
+
+  configuration.settings.pricingBasis = "custom";
+  const custom = normalizeConfiguration(configuration);
+  assert.equal(custom.settings.pricingRevision, "edited-catalog-1");
+  assert.equal(custom.prices.some((row) => row.model === "codex-auto-review"), false);
 });
 
 test("database pricing rows override packaged prices and apply the regional multiplier", () => {

@@ -17,7 +17,7 @@ test("dashboard summary keeps daily buckets chronological for time-series charts
   assert.deepEqual(summary.daily.map((row) => row.name), ["2026-01-01", "2026-01-02", "2026-01-03"]);
 });
 
-test("dashboard summary exposes the current local calendar month", () => {
+test("dashboard summary exposes the current UTC calendar month", () => {
   const report = newReport();
   report.monthlyCostLimitUsd = 100;
   report.monthly["2026-06"] = statsFixture({ costUsd: 12 });
@@ -29,19 +29,32 @@ test("dashboard summary exposes the current local calendar month", () => {
     costUsd: 34.5,
   });
 
-  const summary = webSummary(report, defaultOptions({ now: new Date(2026, 6, 17, 12, 0, 0) }));
+  const summary = webSummary(report, defaultOptions({ now: new Date("2026-07-17T12:00:00.000Z") }));
 
-  assert.equal(summary.generatedAt, new Date(2026, 6, 17, 12, 0, 0).toISOString());
+  assert.equal(summary.generatedAt, "2026-07-17T12:00:00.000Z");
+  assert.equal(summary.calendarTimeZone, "UTC");
   assert.equal(summary.currentMonth.name, "2026-07");
   assert.equal(summary.currentMonth.through, "2026-07-17");
-  assert.equal(summary.currentMonth.startAt, new Date(2026, 6, 1).toISOString());
-  assert.equal(summary.currentMonth.endAt, new Date(2026, 6, 18).toISOString());
+  assert.equal(summary.currentMonth.startAt, "2026-07-01T00:00:00.000Z");
+  assert.equal(summary.currentMonth.endAt, "2026-07-18T00:00:00.000Z");
   assert.equal(summary.currentMonth.costUsd, 34.5);
   assert.equal(summary.currentMonth.requests, 9);
   assert.equal(summary.currentMonth.limitUsd, 100);
   assert.equal(summary.currentMonth.remainingUsd, 65.5);
   assert.equal(summary.currentMonth.overageUsd, 0);
   assert.equal(summary.currentMonth.usedRatio, 0.345);
+});
+
+test("dashboard summary chooses the billing month from UTC rather than local time", () => {
+  const report = newReport();
+  report.monthly["2026-08"] = statsFixture({ requests: 1, costUsd: 5 });
+
+  const summary = webSummary(report, defaultOptions({ now: new Date("2026-08-01T01:00:00.000Z") }));
+
+  assert.equal(summary.currentMonth.name, "2026-08");
+  assert.equal(summary.currentMonth.through, "2026-08-01");
+  assert.equal(summary.currentMonth.startAt, "2026-08-01T00:00:00.000Z");
+  assert.equal(summary.currentMonth.costUsd, 5);
 });
 
 test("dashboard summary returns a zero current month when it has no usage", () => {

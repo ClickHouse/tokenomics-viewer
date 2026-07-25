@@ -919,6 +919,104 @@ test("unknown providers and models remain unpriced", () => {
   assert.equal(reportModel.inferProvider("mystery-model"), "unknown");
 });
 
+test("OpenAI priority service tier applies the model-specific fast multiplier", () => {
+  const usageValue = simpleUsage(100_000, 100_000);
+  const date = new Date("2026-07-10T00:00:00.000Z");
+  const expectedMultipliers = {
+    "gpt-5.5": 2.5,
+    "gpt-5.6-sol": 2.5,
+    "gpt-5.6-luna": 2.5,
+    "gpt-5.4": 2,
+  };
+
+  for (const [model, multiplier] of Object.entries(expectedMultipliers)) {
+    const standard = pricing.calculateCost(
+      "openai",
+      model,
+      usageValue,
+      date,
+      { ...pricingOptions, serviceTier: "default" },
+    );
+    const priority = pricing.calculateCost(
+      "openai",
+      model,
+      usageValue,
+      date,
+      { ...pricingOptions, serviceTier: "priority" },
+    );
+
+    assert.equal(standard.known, true, `${model} standard tier must be priced`);
+    assert.equal(priority.known, true, `${model} priority tier must be priced`);
+    assert.equal(priority.amount, standard.amount * multiplier, `${model} fast multiplier`);
+  }
+});
+
+test("missing or unknown OpenAI service tiers stay at standard pricing", () => {
+  const usageValue = simpleUsage(100_000, 100_000);
+  const date = new Date("2026-07-10T00:00:00.000Z");
+  const standard = pricing.calculateCost("openai", "gpt-5.6-sol", usageValue, date, pricingOptions);
+  const legacy = pricing.calculateCost("openai", "gpt-5.6-sol", usageValue, date, {
+    ...pricingOptions,
+    serviceTier: null,
+  });
+  const unknown = pricing.calculateCost("openai", "gpt-5.6-sol", usageValue, date, {
+    ...pricingOptions,
+    serviceTier: "future-tier",
+  });
+
+  assert.equal(legacy.amount, standard.amount, "old logs without a tier remain standard-priced");
+  assert.equal(unknown.amount, standard.amount, "unknown tiers must not silently become fast");
+});
+
+test("codex-auto-review is priced at the standard OpenAI rate even with priority context", () => {
+  const cost = pricing.calculateCost(
+    "openai",
+    "codex-auto-review",
+    {
+      ...simpleUsage(1_000_000, 1_000_000),
+      cacheRead: 1_000_000,
+      inputIncludesCacheRead: false,
+    },
+    new Date("2026-07-15T00:00:00.000Z"),
+    { ...pricingOptions, serviceTier: "priority" },
+  );
+
+  assert.equal(cost.known, true);
+  assert.deepEqual(roundCosts(cost.breakdown), {
+    input: 2.5,
+    cacheCreate5m: 0,
+    cacheCreate30m: 0,
+    cacheCreate1h: 0,
+    cacheRead: 0.25,
+    output: 15,
+  });
+  assert.equal(cost.amount, 17.75);
+});
+
+test("standard catalog fallback is limited to packaged codex-auto-review pricing", () => {
+  const configuration = require("../lib/core/configuration").defaultConfiguration();
+  const withoutAutoReview = configuration.prices.filter((row) => row.model !== "codex-auto-review");
+  const withoutGpt54 = configuration.prices.filter((row) => row.model !== "gpt-5.4");
+  const usageValue = simpleUsage(1_000_000, 1_000_000);
+  const timestamp = new Date("2026-07-15T00:00:00.000Z");
+
+  assert.equal(pricing.calculateCost("openai", "codex-auto-review", usageValue, timestamp, {
+    ...pricingOptions,
+    pricingBasis: "standard",
+    pricingCatalog: withoutAutoReview,
+  }).known, true);
+  assert.equal(pricing.calculateCost("openai", "codex-auto-review", usageValue, timestamp, {
+    ...pricingOptions,
+    pricingBasis: "custom",
+    pricingCatalog: withoutAutoReview,
+  }).known, false);
+  assert.equal(pricing.calculateCost("openai", "gpt-5.4", usageValue, timestamp, {
+    ...pricingOptions,
+    pricingBasis: "standard",
+    pricingCatalog: withoutGpt54,
+  }).known, false);
+});
+
 test("reasoning output is clamped to visible output tokens", () => {
   const normalized = usage.normalizeUsage({ output: 10, reasoningOutput: 50, inputIncludesCacheRead: false });
   assert.equal(normalized.reasoningOutput, 10);
@@ -1003,12 +1101,15 @@ test("cumulative usage resets expose sequenceReset and establish a new baseline"
 });
 
 test("date and ISO week keys honor their calendar boundaries", () => {
-  const endOfDay = new Date(2026, 0, 4, 23, 59, 59, 999);
-  const nextDay = new Date(2026, 0, 5, 0, 0, 0, 0);
+  const endOfDay = new Date("2026-01-04T23:59:59.999Z");
+  const nextDay = new Date("2026-01-05T00:00:00.000Z");
   assert.equal(reportModel.dateKey(endOfDay), "2026-01-04");
   assert.equal(reportModel.dateKey(nextDay), "2026-01-05");
-  assert.equal(reportModel.weekKey(new Date(2021, 0, 1)), "2020-W53");
-  assert.equal(reportModel.weekKey(new Date(2021, 0, 4)), "2021-W01");
+  assert.equal(reportModel.weekKey(new Date("2021-01-01T00:00:00.000Z")), "2020-W53");
+  assert.equal(reportModel.weekKey(new Date("2021-01-04T00:00:00.000Z")), "2021-W01");
+  assert.equal(reportModel.dateKey(new Date("2026-01-01T01:30:00.000Z")), "2026-01-01");
+  assert.equal(reportModel.monthKey(new Date("2026-01-01T01:30:00.000Z")), "2026-01");
+  assert.equal(reportModel.yearKey(new Date("2026-01-01T01:30:00.000Z")), "2026");
   assert.equal(reportModel.quarterHourKey(new Date("2026-07-10T12:14:59.999Z")), "2026-07-10T12:00Z");
   assert.equal(reportModel.quarterHourKey(new Date("2026-07-10T12:15:00.000Z")), "2026-07-10T12:15Z");
   assert.equal(reportModel.quarterHourKey(new Date(NaN)), null);
