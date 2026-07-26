@@ -77,6 +77,30 @@ test("SQLite adds service_tier to an existing usage_events table", () => {
   }
 });
 
+test("SQLite adds service_mode and agent to an existing usage_events table", () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-service-mode-migration-test-"));
+  const dbPath = Path.join(tmp, "tokenomics.sqlite");
+  const backend = createSqliteBackend();
+  backend.buildReportFromDatabase(dbPath, defaultOptions());
+
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec("ALTER TABLE usage_events DROP COLUMN service_mode");
+  legacy.exec("ALTER TABLE usage_events DROP COLUMN agent");
+  legacy.close();
+
+  backend.buildReportFromDatabase(dbPath, defaultOptions());
+  const migrated = new DatabaseSync(dbPath);
+  try {
+    const columns = migrated.prepare("SELECT name, dflt_value FROM pragma_table_info('usage_events') WHERE name IN ('service_mode', 'agent') ORDER BY name").all();
+    assert.deepEqual(columns.map((column) => ({ ...column })), [
+      { name: "agent", dflt_value: "'unknown'" },
+      { name: "service_mode", dflt_value: "'unknown'" },
+    ]);
+  } finally {
+    migrated.close();
+  }
+});
+
 test("SQLite fork pre-scan excludes unchanged sources", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-prescan-test-"));
   const jsonl = Path.join(tmp, "session.jsonl");
@@ -476,6 +500,16 @@ test("SQLite round-trip preserves raw report key totals", async () => {
   assert.deepEqual(Object.keys(stored.models), Object.keys(raw.models));
   assert.deepEqual(Object.keys(stored.projects), Object.keys(raw.projects));
   assert.deepEqual(stored.providerModelEffortDaily, raw.providerModelEffortDaily);
+  assert.equal(stored.serviceTiers.unknown.requests, 1);
+  assert.equal(stored.agents.codex.requests, 1);
+  assert.equal(stored.serviceModes.unknown.requests, 1);
+  const rows = new DatabaseSync(db);
+  try {
+    const row = rows.prepare("SELECT service_tier, service_mode, agent FROM usage_events").get();
+    assert.deepEqual({ ...row }, { service_tier: "unknown", service_mode: "unknown", agent: "codex" });
+  } finally {
+    rows.close();
+  }
 });
 
 test("changed source replacement removes dependent SQLite rows", async () => {

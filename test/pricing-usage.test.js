@@ -951,6 +951,44 @@ test("OpenAI priority service tier applies the model-specific fast multiplier", 
   }
 });
 
+test("Anthropic fast pricing is limited to the supported Opus 4.8 catalog entry", () => {
+  const usageValue = simpleUsage(1_000_000, 1_000_000);
+  const date = new Date("2026-07-26T00:00:00.000Z");
+  const standard = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "standard",
+  });
+  const fast = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "fast",
+  });
+  const unsupported = pricing.calculateCost("anthropic", "claude-sonnet-4-6", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "fast",
+  });
+  assert.equal(standard.amount, 30);
+  assert.equal(fast.amount, 60);
+  assert.equal(unsupported.amount, 18);
+});
+
+test("Anthropic fast mode does not apply packaged multiplier to custom pricing", () => {
+  const usageValue = simpleUsage(1_000_000, 1_000_000);
+  const custom = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, new Date("2026-07-26T00:00:00.000Z"), {
+    pricingBasis: "custom",
+    serviceMode: "fast",
+    pricingCatalog: [{
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      variant: "standard",
+      matchMode: "prefix",
+      input: 1,
+      output: 2,
+      cacheRead: 0.1,
+    }],
+  });
+  assert.equal(custom.amount, 3);
+});
+
 test("missing or unknown OpenAI service tiers stay at standard pricing", () => {
   const usageValue = simpleUsage(100_000, 100_000);
   const date = new Date("2026-07-10T00:00:00.000Z");

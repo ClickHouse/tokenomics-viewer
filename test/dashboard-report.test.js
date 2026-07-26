@@ -17,6 +17,21 @@ test("dashboard summary keeps daily buckets chronological for time-series charts
   assert.deepEqual(summary.daily.map((row) => row.name), ["2026-01-01", "2026-01-02", "2026-01-03"]);
 });
 
+test("dashboard summary exposes service modes as distinct analytics buckets", () => {
+  const report = newReport();
+  report.serviceModes.standard = statsFixture({ requests: 1, costUsd: 3 });
+  report.serviceModes.fast = statsFixture({ requests: 2, costUsd: 6 });
+  report.serviceModes.unknown = statsFixture({ requests: 3, costUsd: 0 });
+
+  const summary = webSummary(report, defaultOptions());
+
+  assert.deepEqual(summary.serviceModes.map((row) => row.name), ["fast", "standard", "unknown"]);
+  const html = require("../lib/dashboard").dashboardHtml();
+  assert.match(html, /service-mode/);
+  assert.match(html, /Fast/);
+  assert.match(html, /Unknown/);
+});
+
 test("dashboard summary exposes the current UTC calendar month", () => {
   const report = newReport();
   report.monthlyCostLimitUsd = 100;
