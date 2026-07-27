@@ -307,6 +307,9 @@ test("ClickHouse configuration revisions publish marker-last and reject stale wr
     const markerInsert = mock.requests.findLastIndex((request) => request.query.startsWith("INSERT INTO configuration_revisions"));
     assert.ok(settingsInsert >= 0 && pricingInsert > settingsInsert);
     assert.ok(usageOverlay > pricingInsert && rateLimitOverlay > usageOverlay && markerInsert > rateLimitOverlay);
+    const rateLimitOverlayQuery = mock.requests[rateLimitOverlay].query;
+    assert.doesNotMatch(rateLimitOverlayQuery, /raw\.service_mode/);
+    assert.match(rateLimitOverlayQuery, /'unknown' = 'fast'/);
     assert.ok(mock.requests.some((request) => request.query.includes("SELECT DISTINCT key, value_json")));
     assert.ok(mock.requests.some((request) => request.query.includes("SELECT DISTINCT *") && request.query.includes("FROM pricing_catalog")));
   });
