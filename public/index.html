@@ -45,6 +45,16 @@
     .token-card .value { font-size:16px; white-space:nowrap; }
     .plan-grid, .quota-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; }
     .plan-grid { margin-bottom:12px; }
+    .service-mode-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; }
+    .service-mode-card { border:1px solid var(--line); border-left:4px solid var(--service-mode-color); border-radius:6px; padding:10px 12px; min-width:0; }
+    .service-mode-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .service-mode-card-label { font-weight:650; }
+    .service-mode-card-value { color:var(--muted); font-size:12px; margin-top:4px; }
+    .observed-harness-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:10px; }
+    .observed-harness-card { border:1px solid var(--line); border-radius:6px; padding:10px 12px; min-width:0; }
+    .observed-harness-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+    .observed-harness-card-label { font-weight:650; overflow-wrap:anywhere; }
+    .observed-harness-card-meta { color:var(--muted); font-size:12px; margin-top:4px; overflow-wrap:anywhere; }
     .plan-item, .quota-item { min-width:0; border:1px solid var(--line); border-radius:6px; padding:12px; }
     .plan-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .plan-name { margin-top:5px; font-size:16px; font-weight:700; }
@@ -155,8 +165,8 @@
     body[data-dashboard-mode="settings"] #pricing-settings { display:block; }
     body[data-dashboard-mode="settings"] .section-nav { display:none; }
     @media (max-width: 1180px) { .cards { grid-template-columns:repeat(3, minmax(0, 1fr)); } .card:nth-child(3) { border-right:0; } .card:nth-child(n+4) { border-top:1px solid var(--line); } }
-    @media (max-width: 760px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } .card, .card:nth-child(3) { border-right:1px solid var(--line); border-top:1px solid var(--line); } .card:nth-child(-n+2) { border-top:0; } .card:nth-child(2n) { border-right:0; } .card:last-child { grid-column:1 / -1; border-right:0; } .panel-head { display:grid; } .chart-head-meta { justify-items:start; } .hover-legend { justify-items:start; } .legend-line { justify-content:flex-start; } .date-controls { justify-content:flex-start; } .recommendation-list { grid-template-columns:1fr; } .recommendation-item:nth-child(odd) { border-right:0; } .settings-grid { grid-template-columns:1fr; } .settings-actions { justify-content:flex-start; } .pricing-table th:nth-child(2), .pricing-table td:nth-child(2) { position:static; box-shadow:none; } }
-    @media (max-width: 560px) { .brand-row { align-items:flex-start; flex-wrap:wrap; } .brand-group { align-items:flex-start; flex-direction:column; gap:3px; } .header-actions { width:100%; justify-content:space-between; } .sync-state { max-width:240px; } .section-nav { gap:18px; } main { padding:12px; } section { scroll-margin-top:170px; } .cards { grid-template-columns:1fr; } .card, .card:nth-child(3), .card:nth-child(2n) { border-right:0; border-top:1px solid var(--line); } .card:first-child { border-top:0; } .card:last-child { grid-column:auto; } .token-card .value { white-space:normal; } .chart-wrap, .project-chart-wrap { min-height:330px; } .mix-canvas { height:330px; } .date-control-group { flex-wrap:wrap; } .chart-help::after { position:fixed; inset:auto 12px 12px 12px; width:auto; transform:translateY(3px); } }
+    @media (max-width: 760px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } .card, .card:nth-child(3) { border-right:1px solid var(--line); border-top:1px solid var(--line); } .card:nth-child(-n+2) { border-top:0; } .card:nth-child(2n) { border-right:0; } .card:last-child { grid-column:1 / -1; border-right:0; } .service-mode-grid { grid-template-columns:1fr; } .panel-head { display:grid; } .chart-head-meta { justify-items:start; } .hover-legend { justify-items:start; } .legend-line { justify-content:flex-start; } .date-controls { justify-content:flex-start; } .recommendation-list { grid-template-columns:1fr; } .recommendation-item:nth-child(odd) { border-right:0; } .settings-grid { grid-template-columns:1fr; } .settings-actions { justify-content:flex-start; } .pricing-table th:nth-child(2), .pricing-table td:nth-child(2) { position:static; box-shadow:none; } }
+    @media (max-width: 560px) { .brand-row { align-items:flex-start; flex-wrap:wrap; } .brand-group { align-items:flex-start; flex-direction:column; gap:3px; } .header-actions { width:100%; justify-content:space-between; } .sync-state { max-width:240px; } .section-nav { gap:18px; } main { padding:12px; } section { scroll-margin-top:170px; } .cards { grid-template-columns:1fr; } .card, .card:nth-child(3), .card:nth-child(2n) { border-right:0; border-top:1px solid var(--line); } .card:first-child { border-top:0; } .card:last-child { grid-column:auto; } .observed-harness-grid { grid-template-columns:1fr; } .token-card .value { white-space:normal; } .chart-wrap, .project-chart-wrap { min-height:330px; } .mix-canvas { height:330px; } .date-control-group { flex-wrap:wrap; } .chart-help::after { position:fixed; inset:auto 12px 12px 12px; width:auto; transform:translateY(3px); } }
   </style>
 </head>
 <body data-dashboard-mode="overview">
@@ -179,11 +189,21 @@
       <button class="nav-button active" type="button" data-section-target="overview-section">Summary</button>
       <button class="nav-button analyst-only" type="button" data-section-target="projects-section">Projects</button>
       <button class="nav-button" type="button" data-section-target="models-section">Models</button>
+      <button class="nav-button" type="button" data-section-target="service-mode-section">Service Mode</button>
+      <button class="nav-button" type="button" data-section-target="observed-harness-section">Observed</button>
       <button class="nav-button analyst-only" type="button" data-section-target="efficiency-section">Diagnostics</button>
     </nav>
   </header>
   <main>
     <section class="kpi-band" id="overview-section"><div class="cards" id="cards"></div></section>
+    <section id="service-mode-section" class="service-mode-panel">
+      <div class="panel-head"><div class="panel-title-stack"><h2>Service Mode</h2><div class="muted">Explicit per-request mode telemetry; unknown is not guessed from the model name.</div></div></div>
+      <div class="service-mode-grid" id="service-mode-grid"></div>
+    </section>
+    <section id="observed-harness-section">
+      <div class="panel-head"><div class="panel-title-stack"><h2>Observed Harness Coverage</h2><div class="muted">Session metadata only; usage unavailable and excluded from token and cost totals.</div></div></div>
+      <div class="observed-harness-grid" id="observed-harness-grid"></div>
+    </section>
     <section class="is-hidden" id="subscription-limits">
       <div class="panel-head"><div class="panel-title-stack"><h2>Subscription Limits</h2><div class="muted" id="subscription-limits-summary"></div></div></div>
       <div class="plan-grid" id="subscription-plan-grid"></div>
@@ -336,8 +356,12 @@
     const compactUsd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 });
     const colors = {
       input: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+      accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
       cache: getComputedStyle(document.documentElement).getPropertyValue('--cache').trim(),
       output: getComputedStyle(document.documentElement).getPropertyValue('--out').trim(),
+      standard: getComputedStyle(document.documentElement).getPropertyValue('--cache').trim(),
+      fast: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+      unknown: getComputedStyle(document.documentElement).getPropertyValue('--axis').trim(),
       fg: getComputedStyle(document.documentElement).getPropertyValue('--fg').trim(),
       muted: getComputedStyle(document.documentElement).getPropertyValue('--muted').trim(),
       panel: getComputedStyle(document.documentElement).getPropertyValue('--panel').trim(),
@@ -376,6 +400,50 @@
         : formatUsdCompact(month.remainingUsd || 0) + ' left';
       return label + ' ' + spend + ' / ' + formatUsdCompact(month.limitUsd) +
         ' · ' + formatPct(month.usedRatio || 0) + ' used · ' + distance;
+    }
+
+    function renderServiceModes(summary) {
+      const grid = document.getElementById('service-mode-grid');
+      if (!grid) return;
+      const stats = new Map((summary.serviceModes || []).map(row => [row.name, row]));
+      const modes = [
+        { name: 'standard', label: 'Standard', color: colors.standard || colors.cache },
+        { name: 'fast', label: 'Fast', color: colors.fast || colors.accent },
+        { name: 'unknown', label: 'Unknown', color: colors.unknown || colors.axis },
+      ];
+      grid.innerHTML = modes.map(mode => {
+        const row = stats.get(mode.name) || {};
+        const requests = Number(row.requests || 0);
+        return '<article class="service-mode-card" style="--service-mode-color:' + esc(mode.color) + '">' +
+          '<div class="service-mode-card-head"><span class="service-mode-card-label">' + esc(mode.label) + '</span>' +
+          '<strong>' + esc(formatUsdCompact(row.costUsd || 0)) + '</strong></div>' +
+          '<div class="service-mode-card-value">' + esc(formatTokenCount(requests)) + ' request' + (requests === 1 ? '' : 's') + '</div></article>';
+      }).join('');
+    }
+
+    function renderObservedHarnesses(summary) {
+      const grid = document.getElementById('observed-harness-grid');
+      if (!grid) return;
+      const rows = summary.observedHarnesses || [];
+      if (!rows.length) {
+        grid.innerHTML = '<div class="muted">No observed-only harness sessions discovered.</div>';
+        return;
+      }
+      grid.innerHTML = rows.map(row => {
+        const model = row.model || '(unknown model)';
+        const sessions = Number(row.sessionCount || 0);
+        const project = row.projectCount > 1
+          ? row.projectCount + ' projects' + ((row.projects || []).length ? ' · ' + row.projects.slice(0, 3).join(', ') : '')
+          : (row.projects || [row.project || '(unknown project)'])[0];
+        const timestamp = row.latestSourceTimestamp ? new Date(row.latestSourceTimestamp).toLocaleString() : 'Timestamp unavailable';
+        const context = Number.isFinite(row.contextTokens)
+          ? ' · context ' + formatTokenCount(row.contextTokens) + (Number.isFinite(row.contextWindowTokens) ? '/' + formatTokenCount(row.contextWindowTokens) : '')
+          : '';
+        return '<article class="observed-harness-card"><div class="observed-harness-card-head"><span class="observed-harness-card-label">' +
+          esc(row.agent) + ' · ' + esc(row.provider) + '</span><strong>' + esc(String(sessions)) + ' session' + (sessions === 1 ? '' : 's') + '</strong></div>' +
+          '<div class="observed-harness-card-meta">' + esc(model + ' · ' + project) + '</div>' +
+          '<div class="observed-harness-card-meta">' + esc(timestamp + context + ' · usage unavailable') + '</div></article>';
+      }).join('');
     }
 
     function quotaWindowLabel(minutes) {
@@ -1764,6 +1832,8 @@
         card('Cache Tokens', segmentCardText(summary.total, 'cache'), 'token-card'),
         card('Output Tokens', segmentCardText(summary.total, 'output'), 'token-card'),
       ].join('');
+      renderServiceModes(summary);
+      renderObservedHarnesses(summary);
       renderSubscriptionWindows(summary);
       for (const range of Object.values(timelineRanges)) {
         range.monthStartAt = summary.currentMonth?.startAt || '';
@@ -2297,7 +2367,7 @@
     function syncSectionNav() {
       const threshold = document.getElementById('app-header').getBoundingClientRect().height + 24;
       if (dashboardMode === 'settings') return;
-      const orderedTargets = ['overview-section', 'projects-section', 'models-section', 'efficiency-section'];
+      const orderedTargets = ['overview-section', 'projects-section', 'models-section', 'service-mode-section', 'observed-harness-section', 'efficiency-section'];
       if (window.scrollY < 80) {
         activeSectionTarget = 'overview-section';
       } else {

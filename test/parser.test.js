@@ -248,6 +248,10 @@ test("tracks thread_settings_applied service-tier transitions per Codex thread",
   assert.equal(report._usageEvents.length, 2);
   assert.equal(report._usageEvents[0].serviceTier, "priority");
   assert.equal(report._usageEvents[1].serviceTier, "default");
+  assert.equal(report._usageEvents[0].serviceMode, "fast");
+  assert.equal(report._usageEvents[1].serviceMode, "standard");
+  assert.equal(report._usageEvents[0].agent, "codex");
+  assert.equal(report._usageEvents[1].agent, "codex");
   assert.equal(report._usageEvents[0].cost.amount, 8.75, "priority Sol uses 2.5x standard short pricing");
   assert.equal(report._usageEvents[1].cost.amount, 3.5, "default Sol uses standard short pricing");
   assert.equal(report.total.costUsd, 12.25);
@@ -318,6 +322,45 @@ test("forked child without an explicit tier does not inherit parent priority pri
   assert.equal(report.total.requests, 1);
   assert.equal(report._usageEvents[0].cost.amount, 3.5, "missing child tier must remain standard");
   assert.notEqual(report._usageEvents[0].serviceTier, "priority");
+  assert.equal(report._usageEvents[0].serviceMode, "unknown");
+});
+
+test("Claude speed and service_tier metadata stay separate per request", () => {
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), "claude-mode-fixture");
+  const line = (speed, requestId, service_tier) => JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-26T00:00:00.000Z",
+    requestId,
+    cwd: "/tmp/claude-mode",
+    message: {
+      model: "claude-opus-4-8",
+      usage: { input_tokens: 1_000_000, output_tokens: 1, speed, service_tier },
+    },
+  });
+
+  processLine(line("fast", "req-fast"), 1);
+  processLine(line("normal", "req-normal"), 2);
+  processLine(line(undefined, "req-missing"), 3);
+  processLine(line("invalid", "req-invalid"), 4);
+  processLine(line("standard", "req-priority-tier", "priority"), 5);
+
+  assert.deepEqual(report._usageEvents.map((event) => ({
+    serviceTier: event.serviceTier,
+    serviceMode: event.serviceMode,
+    agent: event.agent,
+  })), [
+    { serviceTier: "unknown", serviceMode: "fast", agent: "claude-code" },
+    { serviceTier: "unknown", serviceMode: "standard", agent: "claude-code" },
+    { serviceTier: "unknown", serviceMode: "unknown", agent: "claude-code" },
+    { serviceTier: "unknown", serviceMode: "unknown", agent: "claude-code" },
+    { serviceTier: "priority", serviceMode: "standard", agent: "claude-code" },
+  ]);
+  assert.equal(
+    report._usageEvents[4].cost.amount,
+    report._usageEvents[1].cost.amount,
+    "Anthropic priority service_tier must not imply fast pricing",
+  );
 });
 
 test("omp malformed JSON is counted in lenient mode and rejected in strict mode", async () => {

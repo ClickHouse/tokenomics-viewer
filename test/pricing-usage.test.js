@@ -951,6 +951,61 @@ test("OpenAI priority service tier applies the model-specific fast multiplier", 
   }
 });
 
+test("Anthropic Opus 5 and Opus 4.8 share standard and fast pricing", () => {
+  const usageValue = simpleUsage(1_000_000, 1_000_000);
+  usageValue.cacheCreate5m = 1_000_000;
+  usageValue.cacheCreate1h = 1_000_000;
+  usageValue.cacheRead = 1_000_000;
+  const date = new Date("2026-07-26T00:00:00.000Z");
+  const standard48 = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "standard",
+  });
+  const fast48 = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "fast",
+  });
+  const standard5 = pricing.calculateCost("anthropic", "claude-opus-5", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "standard",
+  });
+  const fast5 = pricing.calculateCost("anthropic", "claude-opus-5", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "fast",
+  });
+  const unsupported = pricing.calculateCost("anthropic", "claude-sonnet-4-6", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "fast",
+  });
+  const unsupportedStandard = pricing.calculateCost("anthropic", "claude-sonnet-4-6", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "standard",
+  });
+  assert.equal(standard48.amount, 46.75);
+  assert.equal(fast48.amount, 93.5);
+  assert.equal(standard5.amount, standard48.amount);
+  assert.equal(fast5.amount, fast48.amount);
+  assert.equal(unsupported.amount, unsupportedStandard.amount);
+});
+
+test("Anthropic fast mode does not apply packaged multiplier to custom pricing", () => {
+  const usageValue = simpleUsage(1_000_000, 1_000_000);
+  const custom = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, new Date("2026-07-26T00:00:00.000Z"), {
+    pricingBasis: "custom",
+    serviceMode: "fast",
+    pricingCatalog: [{
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      variant: "standard",
+      matchMode: "prefix",
+      input: 1,
+      output: 2,
+      cacheRead: 0.1,
+    }],
+  });
+  assert.equal(custom.amount, 3);
+});
+
 test("missing or unknown OpenAI service tiers stay at standard pricing", () => {
   const usageValue = simpleUsage(100_000, 100_000);
   const date = new Date("2026-07-10T00:00:00.000Z");

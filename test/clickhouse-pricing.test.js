@@ -44,3 +44,18 @@ test("ClickHouse pricing projection applies packaged fast multipliers from servi
   const customSql = buildClickHouseCostProjection(custom, { alias: "raw" });
   assert.doesNotMatch(customSql.projection, /raw\.service_tier/);
 });
+
+test("ClickHouse pricing projection uses canonical service_mode for Anthropic fast pricing", () => {
+  const sql = buildClickHouseCostProjection(defaultConfiguration(), { alias: "raw" });
+
+  assert.match(sql.projection, /raw\.service_mode/);
+  assert.match(sql.projection, /'anthropic'/);
+  assert.match(sql.projection, /Y2xhdWRlLW9wdXMtNQ==/);
+  assert.match(sql.projection, /Y2xhdWRlLW9wdXMtNC04/);
+  assert.match(sql.projection, /, 2,/);
+
+  const custom = defaultConfiguration();
+  custom.settings.pricingBasis = "custom";
+  const customSql = buildClickHouseCostProjection(custom, { alias: "raw" });
+  assert.doesNotMatch(customSql.projection, /raw\.service_mode/);
+});

@@ -312,6 +312,44 @@ test("ClickHouse configuration revisions publish marker-last and reject stale wr
   });
 });
 
+test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the revision marker", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_packaged_upgrade_test" });
+    await loadConfiguration(options);
+
+    const legacyRevision = "legacy-packaged-2";
+    mock.activeRows.configuration_revisions[0].revision = legacyRevision;
+    for (const row of mock.activeRows.analytics_settings) {
+      row.revision = legacyRevision;
+      if (row.key === "pricingRevision") row.value_json = JSON.stringify("packaged-2");
+    }
+    mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog
+      .filter((row) => row.model !== "claude-opus-5")
+      .map((row) => ({ ...row, revision: legacyRevision }));
+
+    const before = mock.requests.length;
+    const upgraded = await loadConfiguration(options);
+    const requests = mock.requests.slice(before);
+
+    assert.notEqual(upgraded.revision, legacyRevision);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-3:[0-9a-f]{32}$/);
+    assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
+    const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
+    const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
+    const marker = requests.findIndex((request) => request.query.startsWith("INSERT INTO configuration_revisions"));
+    assert.ok(usageOverlay >= 0 && rateLimitOverlay > usageOverlay && marker > rateLimitOverlay);
+
+    const stableStart = mock.requests.length;
+    const stable = await loadConfiguration(options);
+    const repeatedInserts = mock.requests
+      .slice(stableStart)
+      .filter((request) => request.query.trimStart().startsWith("INSERT INTO"));
+    assert.equal(stable.revision, upgraded.revision);
+    assert.equal(repeatedInserts.length, 0, "completed packaged upgrade must not replay pricing overlays");
+  });
+});
+
 test("ClickHouse pricing overlay failure leaves the previous configuration visible", async () => {
   const mock = createClickHouseServer({ failureQueryIncludes: "INSERT INTO rate_limit_sample_costs" });
   await withServer(mock, async (clickhouseUrl) => {
@@ -428,6 +466,8 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     assert.ok(queries.some((query) => (
       query.includes("CREATE TABLE IF NOT EXISTS usage_events")
       && query.includes("service_tier LowCardinality(String)")
+      && query.includes("service_mode LowCardinality(String)")
+      && query.includes("agent LowCardinality(String)")
       && query.includes("CODEC(ZSTD(3))")
       && query.includes("CODEC(Delta, ZSTD(1))")
       && query.includes("CODEC(Gorilla, ZSTD(1))")
@@ -439,16 +479,23 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     const alter = queries.find((query) => query.trim().startsWith("ALTER TABLE usage_events"));
     assert.ok(alter, "long ALTER TABLE SQL should be observed from the request body");
     assert.match(alter, /ADD COLUMN IF NOT EXISTS service_tier/);
+    assert.match(alter, /ADD COLUMN IF NOT EXISTS service_mode/);
+    assert.match(alter, /ADD COLUMN IF NOT EXISTS agent/);
     assert.match(alter, /ADD COLUMN IF NOT EXISTS visible_chars_per_token/);
     const usageStatsQuery = queries.find((query) => query.includes("FROM usage_events") && query.includes("GROUP BY GROUPING SETS"));
     assert.ok(usageStatsQuery);
     assert.match(usageStatsQuery, /'providerModelEffortDaily'/);
     assert.match(usageStatsQuery, /'serviceTiers'/);
+    assert.match(usageStatsQuery, /'serviceModes'/);
+    assert.match(usageStatsQuery, /'agents'/);
     assert.match(usageStatsQuery, /\(provider, model, effort, date_key\)/);
     assert.equal((usageStatsQuery.match(/FROM usage_events AS raw/g) || []).length, 1);
     assert.doesNotMatch(usageStatsQuery, /UNION ALL/);
     assert.equal(mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
     assert.equal(JSON.parse(mock.inserts.usage_events[0].body.trim().split("\n")[0]).service_tier, "unknown");
+    const firstUsageRow = JSON.parse(mock.inserts.usage_events[0].body.trim().split("\n")[0]);
+    assert.equal(firstUsageRow.service_mode, "unknown");
+    assert.equal(firstUsageRow.agent, "codex");
     assert.equal(mock.inserts.telemetry_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
     assert.match(mock.inserts.telemetry_events[0].body, /token_count/);
     assert.ok(mock.inserts.usage_events.length > 1);

@@ -1,9 +1,10 @@
 # Tokenomics Viewer
 
-Local-first cost and token analytics for Codex, Claude Code, and omp (oh-my-pi), powered by
+Local-first cost and token analytics for Codex, Claude Code, omp (oh-my-pi),
+Pi, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, and Grok Build, powered by
 ClickHouse. Tokenomics reads local session logs, removes replayed parent traces
-from forked Codex sessions, normalizes usage, and estimates costs from an
-editable pricing catalog.
+from forked Codex sessions, normalizes exact usage where the source proves its
+semantics, and estimates costs from an editable pricing catalog.
 
 The dashboard and database run on your machine. Tokenomics does not upload
 session logs or reports.
@@ -28,7 +29,8 @@ The installer does not use `sudo` or install npm packages. On the first run it:
 3. Installs a private Node.js 26 runtime when the system Node.js is too old.
 4. Installs `clickhousectl`, selects stable ClickHouse, and starts the named
    `tokenomics` server.
-5. Imports local Codex, Claude Code, and omp sessions into ClickHouse.
+5. Imports supported exact-usage sessions and observed-only Cursor/Grok
+   metadata into ClickHouse.
 6. Starts the dashboard on a loopback address and opens it in your browser.
 
 Subsequent launches are one command:
@@ -60,9 +62,16 @@ command to use. It does not edit shell startup files.
   resource diagnostics.
 - Deterministic recommended actions with evidence, confidence, and caveats.
 - An editable, database-backed provider and model pricing catalog.
+- Usage events preserve the billing provider, harness agent, raw service tier,
+  and canonical `standard`/`fast`/`unknown` service mode as separate dimensions.
+- The dashboard exposes Service Mode totals so explicit fast telemetry is not
+  confused with a model name or a provider-specific tier.
 - Codex fast-mode credit-equivalent pricing when a session records its service
   tier.
 - Codex rate-limit consumption summaries when snapshots are present.
+- Observed Harness Coverage for Cursor Agent and Grok Build session metadata.
+  These sessions are explicitly `observed-only`: usage is unavailable and they
+  never change exact token, request, cost, agent, or service-mode totals.
 
 Cost estimates are analytical aids, not billing statements. Subscription usage,
 negotiated rates, batch pricing, missing service-tier markers, and unrecognized
@@ -89,9 +98,15 @@ Limit discovery to one source. Tokenomics options follow `--`:
 tokenomics-launch -- --source codex
 tokenomics-launch -- --source claude
 tokenomics-launch -- --source omp
+tokenomics-launch -- --source gemini
+tokenomics-launch -- --source opencode
+tokenomics-launch -- --source cursor
+tokenomics-launch -- --source grok
 ```
 
-The default `--source all` scans Claude Code, Codex, and omp together.
+The default `--source all` scans exact Claude Code, Codex, omp, Pi, Gemini,
+Qwen, and OpenCode sources together, plus observed-only Cursor Agent and Grok
+Build metadata.
 
 Serve the current ClickHouse database without scanning source files:
 
@@ -207,15 +222,38 @@ pricing changes, and incremental syncs do not require a reset.
 
 With no explicit paths, Tokenomics discovers:
 
-- `~/.claude/projects/**/*.jsonl`
+- `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/**/*.jsonl`, or every root in the
+  path-delimited `CLAUDE_CONFIG_DIRS`
+- Claude Desktop/Cowork
+  `local-agent-mode-sessions/**/.claude/projects/**/*.jsonl`
 - `${CODEX_HOME:-~/.codex}/sessions/**/*.{jsonl,jsonl.zst}`
 - `${CODEX_HOME:-~/.codex}/archived_sessions/**/*.{jsonl,jsonl.zst,zip}`
 - `${OMP_HOME:-~/.omp/agent}/sessions/**/*.jsonl` (omp/oh-my-pi)
+- `~/.pi/agent/sessions/**/*.jsonl` (Pi)
+- `~/.gemini/tmp/*/chats/session-*.{json,jsonl}` (Gemini CLI)
+- `~/.qwen/projects/*/chats/*.jsonl` (Qwen Code)
+- `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode*.db` (OpenCode,
+  read-only)
+- `~/.cursor/projects/*/agent-transcripts/**/*.jsonl` (Cursor Agent,
+  observed-only)
+- `~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl` (Grok Build,
+  observed-only; reads sibling `summary.json` and optional `signals.json`)
 
-Use `--source claude`, `--source codex`, `--source omp`, `--archives`, or `--no-archives` to
-control default discovery. ZIP and Zstandard-compressed rollouts are read
+Use `--source claude`, `--source codex`, `--source omp`, `--source pi`,
+`--source gemini`, `--source qwen`, `--source opencode`, `--source cursor`,
+`--source grok`, `--archives`, or `--no-archives` to control default discovery.
+ZIP and Zstandard-compressed rollouts are read
 directly without extracting them. If both `.jsonl` and `.jsonl.zst` versions
 exist during a compression transition, the plain file is read once.
+
+Cursor and Grok Build records are metadata coverage, not token telemetry. The
+ingester does not parse Cursor conversation content or Grok `updates.jsonl`
+events, and never turns file size, mtime, context snapshots, or running totals
+into usage or cost estimates. Cursor records use the transcript file mtime as
+explicit `fileModifiedAt` provenance and leave the model unknown unless a
+future source proves a session-level model. Grok records retain the model and
+project from `summary.json`, plus `contextTokensUsed` and
+`contextWindowTokens` snapshots from `signals.json` when present.
 
 Sync is incremental by source fingerprint. Unchanged sessions are skipped;
 changed files or archive entries replace their previous normalized data. Codex
@@ -235,6 +273,33 @@ complete report visible instead of exposing a partial import.
 Pricing revisions are deliberately excluded from source fingerprints. Editing
 a rate or adding a model updates normalized database costs without reopening
 JSONL, ZIP, or Zstandard source files.
+
+### Exact multi-harness adapters
+
+Pi records per-message `usage` buckets directly. Gemini CLI and Qwen Code
+record cached tokens as a subset of prompt/input tokens, so Tokenomics subtracts
+that subset exactly once before aggregation. Their visible candidate/output and
+thinking buckets are disjoint, so both contribute to output-billed tokens while
+thinking remains available as an attributed subset. OpenCode is opened read-only with
+Node's SQLite API; active top-level session messages use `data.tokens`, retain
+`providerID` as the billing provider and `opencode` as the harness agent, and
+ignore embedded cost in favor of the normal pricing catalog. Claude discovery
+honors its config-directory environment variables and includes nested Claude
+Desktop/Cowork project sessions. Missing or malformed explicit mode metadata
+always remains `unknown`.
+
+### Observed-only Cursor Agent and Grok Build
+
+Cursor Agent and Grok Build are metadata-coverage adapters, not exact usage
+adapters. Cursor discovery uses `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`
+and records only the project path plus transcript file mtime (`fileModifiedAt`);
+conversation lines are not parsed and the model remains unknown. Grok Build
+discovery uses `~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl` and
+reads only sibling `summary.json` plus optional `signals.json` metadata. It
+retains summary model/project/timestamp fields and context-token snapshots when
+present. Neither adapter calls usage aggregation, creates service-mode rows,
+or contributes to exact token/cost totals. The dashboard labels this surface
+“Observed Harness Coverage” and states that usage is unavailable.
 
 ### omp (oh-my-pi)
 
@@ -351,6 +416,18 @@ particular, a forked child rollout that omits its own service tier does not
 inherit the parent's tier, so such local logs can understate workspace billing.
 Custom pricing is used as entered and does not receive these packaged
 multipliers.
+
+Claude Code `usage.speed` is mapped per request: `fast` is fast mode and
+`standard`/`normal` are standard mode; missing or invalid values remain
+`unknown`. Claude `usage.service_tier` is retained separately and never implies
+fast mode. The packaged catalog prices Claude Opus 5 and Claude Opus 4.8 at the
+same standard rates and applies the same 2x fast tariff to both; other models
+stay at their standard catalog rate until an explicit provider tariff is
+verified. Custom pricing is not multiplied by this packaged fast tariff
+([official Claude Code fast-mode documentation](https://code.claude.com/docs/en/fast-mode)).
+Claude's first transition into fast mode can invalidate the current prompt
+cache; Tokenomics prices the token buckets recorded by the harness and does not
+guess that transition from surrounding requests.
 
 `codex-auto-review` is included at effective rates of `$2.50` input, `$0.25`
 cached input, and `$15.00` output per million tokens. Those rates are derived

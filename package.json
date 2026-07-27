@@ -1,7 +1,7 @@
 {
   "name": "tokenomics-viewer",
   "version": "0.0.1",
-  "description": "View token usage, costs, and rate-limit metrics from Codex, Claude Code, and omp (oh-my-pi) sessions",
+  "description": "Local token, cost, and harness analytics for Codex, Claude Code, omp, Pi, Gemini, Qwen, OpenCode, Cursor, and Grok Build",
   "keywords": [
     "codex",
     "claude",
