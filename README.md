@@ -420,10 +420,10 @@ multipliers.
 Claude Code `usage.speed` is mapped per request: `fast` is fast mode and
 `standard`/`normal` are standard mode; missing or invalid values remain
 `unknown`. Claude `usage.service_tier` is retained separately and never implies
-fast mode. The packaged fast tariff currently applies only to the catalog's
-Claude Opus 4.8 entry (2x); other models stay at their standard catalog rate
-until an explicit provider tariff is verified. Custom pricing is not multiplied
-by this packaged fast tariff
+fast mode. The packaged catalog prices Claude Opus 5 and Claude Opus 4.8 at the
+same standard rates and applies the same 2x fast tariff to both; other models
+stay at their standard catalog rate until an explicit provider tariff is
+verified. Custom pricing is not multiplied by this packaged fast tariff
 ([official Claude Code fast-mode documentation](https://code.claude.com/docs/en/fast-mode)).
 Claude's first transition into fast mode can invalidate the current prompt
 cache; Tokenomics prices the token buckets recorded by the harness and does not

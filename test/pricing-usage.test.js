@@ -951,14 +951,25 @@ test("OpenAI priority service tier applies the model-specific fast multiplier", 
   }
 });
 
-test("Anthropic fast pricing is limited to the supported Opus 4.8 catalog entry", () => {
+test("Anthropic Opus 5 and Opus 4.8 share standard and fast pricing", () => {
   const usageValue = simpleUsage(1_000_000, 1_000_000);
+  usageValue.cacheCreate5m = 1_000_000;
+  usageValue.cacheCreate1h = 1_000_000;
+  usageValue.cacheRead = 1_000_000;
   const date = new Date("2026-07-26T00:00:00.000Z");
-  const standard = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
+  const standard48 = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
     pricingBasis: "standard",
     serviceMode: "standard",
   });
-  const fast = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
+  const fast48 = pricing.calculateCost("anthropic", "claude-opus-4-8", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "fast",
+  });
+  const standard5 = pricing.calculateCost("anthropic", "claude-opus-5", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "standard",
+  });
+  const fast5 = pricing.calculateCost("anthropic", "claude-opus-5", usageValue, date, {
     pricingBasis: "standard",
     serviceMode: "fast",
   });
@@ -966,9 +977,15 @@ test("Anthropic fast pricing is limited to the supported Opus 4.8 catalog entry"
     pricingBasis: "standard",
     serviceMode: "fast",
   });
-  assert.equal(standard.amount, 30);
-  assert.equal(fast.amount, 60);
-  assert.equal(unsupported.amount, 18);
+  const unsupportedStandard = pricing.calculateCost("anthropic", "claude-sonnet-4-6", usageValue, date, {
+    pricingBasis: "standard",
+    serviceMode: "standard",
+  });
+  assert.equal(standard48.amount, 46.75);
+  assert.equal(fast48.amount, 93.5);
+  assert.equal(standard5.amount, standard48.amount);
+  assert.equal(fast5.amount, fast48.amount);
+  assert.equal(unsupported.amount, unsupportedStandard.amount);
 });
 
 test("Anthropic fast mode does not apply packaged multiplier to custom pricing", () => {

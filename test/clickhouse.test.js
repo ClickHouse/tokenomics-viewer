@@ -312,6 +312,44 @@ test("ClickHouse configuration revisions publish marker-last and reject stale wr
   });
 });
 
+test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the revision marker", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_packaged_upgrade_test" });
+    await loadConfiguration(options);
+
+    const legacyRevision = "legacy-packaged-2";
+    mock.activeRows.configuration_revisions[0].revision = legacyRevision;
+    for (const row of mock.activeRows.analytics_settings) {
+      row.revision = legacyRevision;
+      if (row.key === "pricingRevision") row.value_json = JSON.stringify("packaged-2");
+    }
+    mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog
+      .filter((row) => row.model !== "claude-opus-5")
+      .map((row) => ({ ...row, revision: legacyRevision }));
+
+    const before = mock.requests.length;
+    const upgraded = await loadConfiguration(options);
+    const requests = mock.requests.slice(before);
+
+    assert.notEqual(upgraded.revision, legacyRevision);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-3:[0-9a-f]{32}$/);
+    assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
+    const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
+    const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
+    const marker = requests.findIndex((request) => request.query.startsWith("INSERT INTO configuration_revisions"));
+    assert.ok(usageOverlay >= 0 && rateLimitOverlay > usageOverlay && marker > rateLimitOverlay);
+
+    const stableStart = mock.requests.length;
+    const stable = await loadConfiguration(options);
+    const repeatedInserts = mock.requests
+      .slice(stableStart)
+      .filter((request) => request.query.trimStart().startsWith("INSERT INTO"));
+    assert.equal(stable.revision, upgraded.revision);
+    assert.equal(repeatedInserts.length, 0, "completed packaged upgrade must not replay pricing overlays");
+  });
+});
+
 test("ClickHouse pricing overlay failure leaves the previous configuration visible", async () => {
   const mock = createClickHouseServer({ failureQueryIncludes: "INSERT INTO rate_limit_sample_costs" });
   await withServer(mock, async (clickhouseUrl) => {

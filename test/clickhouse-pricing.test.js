@@ -50,6 +50,7 @@ test("ClickHouse pricing projection uses canonical service_mode for Anthropic fa
 
   assert.match(sql.projection, /raw\.service_mode/);
   assert.match(sql.projection, /'anthropic'/);
+  assert.match(sql.projection, /Y2xhdWRlLW9wdXMtNQ==/);
   assert.match(sql.projection, /Y2xhdWRlLW9wdXMtNC04/);
   assert.match(sql.projection, /, 2,/);
 

@@ -33,6 +33,9 @@ dashboard breakdowns
   `usage.service_tier`.
 - Claude transcript/API spelling `standard` and OpenTelemetry spelling `normal`
   both normalize to canonical `standard`; `fast` remains `fast`.
+- Packaged Anthropic pricing recognizes canonical `claude-opus-5` and
+  `claude-opus-4-8` at the same standard rates and applies the same verified
+  fast tariff to both.
 - Canonical service mode is `standard`, `fast`, or `unknown`. Unknown values
   remain unknown and never silently receive fast pricing.
 - Provider-specific tier and canonical service mode remain separate stored
@@ -88,6 +91,8 @@ dashboard breakdowns
   remain four distinguishable inputs and only the first receives fast pricing.
 - Claude `usage.service_tier=priority` with `usage.speed=standard` stays standard
   speed.
+- Standard and fast `claude-opus-5` requests price identically to their
+  corresponding `claude-opus-4-8` requests.
 - The first observed fast request is priced only from its recorded cache/input
   buckets; surrounding requests do not invent a cache invalidation.
 - Codex priority/default transitions remain attached to the correct turns.
