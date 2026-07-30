@@ -16,7 +16,18 @@ manual derivation-version discipline.
 - SQLite and ClickHouse store the active analytics settings and structured
   pricing rows in backend-owned tables.
 - A packaged catalog seeds an empty database. Once seeded, the database copy is
-  authoritative for database-backed sync and report operations.
+  authoritative for database-backed sync and report operations, except for an
+  explicit managed packaged revision migration; custom and derived revisions
+  remain authoritative.
+- Packaged rows may be time-versioned with inclusive `effectiveFrom` and
+  `effectiveUntil` bounds. Event timestamps select the applicable row; the
+  GPT-5.6 Luna/Terra legacy rates end at `2026-07-29T23:59:59.999Z`, and the
+  current standard rates begin at `2026-07-30T00:00:00.000Z`.
+- A managed packaged revision upgrade promotes legacy timeless Luna/Terra rows
+  to the historical interval and appends the current interval in the database.
+  SQLite and ClickHouse perform this migration without rereading source bytes;
+  ClickHouse publishes cost overlays before its new revision marker. Custom and
+  derived revisions are not overwritten by this migration.
 - Direct scans without a database continue to use the packaged catalog.
 - Configuration reads return a revision. Writes require that revision and
   replace settings and prices atomically from the API consumer's perspective.
@@ -89,6 +100,9 @@ manual derivation-version discipline.
 6. Invalid, ambiguous, overlapping, or negative pricing rows fail closed.
 7. Backend parity is behavioral: SQLite and ClickHouse return the same normalized
    configuration and both reprice without invalidating source fingerprints.
+8. Time-versioned pricing is resolved per event timestamp; a packaged revision
+   change must preserve historical rates and apply current rates only at their
+   admitted boundary.
 
 ## Execution Order
 
@@ -102,6 +116,8 @@ manual derivation-version discipline.
 6. Reprice normalized database rows without opening source files. In ClickHouse,
    write usage and rate-limit cost overlays before the revision marker.
 7. Replace the in-process report cache after repricing; no Sync is required.
+8. For a managed packaged upgrade, migrate legacy boundedness in the database,
+   then publish the new normalized catalog and overlays without source reimport.
 
 ## Falsifier Roster
 
@@ -117,6 +133,10 @@ manual derivation-version discipline.
   rejected.
 - Configuration change: report costs change immediately, source fingerprints and
   import timestamps remain unchanged, and the next Sync reports no changed source.
+- Temporal packaged pricing: one millisecond before, exactly at, and after the
+  admitted boundary select the expected Luna/Terra rates for both short and long
+  contexts; managed SQLite/ClickHouse upgrades yield four historical and four
+  current rows per model without source reimport.
 - Legacy fingerprint: obsolete pricing fields are ignored without causing a
   one-time full reimport.
 - ClickHouse publication failure: a missing overlay or failed repricing query

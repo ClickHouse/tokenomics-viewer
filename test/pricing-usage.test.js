@@ -911,6 +911,82 @@ test("OpenAI auto pricing changes variant only above the 272k threshold", () => 
   assert.equal(costFor(272_001).breakdown.input, 2.72001);
 });
 
+test("GPT-5.6 Luna and Terra packaged rates switch at the 2026-07-30 boundary", () => {
+  const { defaultConfiguration } = require("../lib/core/configuration");
+  const pricingCatalog = defaultConfiguration().prices;
+  const usage = {
+    input: 1_000_000,
+    cacheCreate30m: 1_000_000,
+    cacheRead: 1_000_000,
+    output: 1_000_000,
+    inputIncludesCacheRead: false,
+  };
+  const before = new Date("2026-07-29T23:59:59.999Z");
+  const exact = new Date("2026-07-30T00:00:00.000Z");
+  const after = new Date("2026-07-30T00:00:00.001Z");
+  const expected = {
+    "gpt-5.6-terra": {
+      old: { input: 2.5, cachedInput: 0.25, cacheCreate30m: 3.125, output: 15 },
+      current: { input: 2, cachedInput: 0.2, cacheCreate30m: 2.5, output: 12 },
+    },
+    "gpt-5.6-luna": {
+      old: { input: 1, cachedInput: 0.1, cacheCreate30m: 1.25, output: 6 },
+      current: { input: 0.2, cachedInput: 0.02, cacheCreate30m: 0.25, output: 1.2 },
+    },
+  };
+
+  for (const [model, rates] of Object.entries(expected)) {
+    for (const variant of ["short", "long"]) {
+      const usageForVariant = variant === "long" ? { ...usage, input: 272_001 } : usage;
+      const oldRates = variant === "long"
+        ? Object.fromEntries(Object.entries(rates.old).map(([key, value]) => [key, Number((value * (key === "output" ? 1.5 : 2)).toFixed(6))]))
+        : rates.old;
+      const currentRates = variant === "long"
+        ? Object.fromEntries(Object.entries(rates.current).map(([key, value]) => [key, Number((value * (key === "output" ? 1.5 : 2)).toFixed(6))]))
+        : rates.current;
+
+      assert.deepEqual(
+        pricing.lookupOpenAIPrices(model, usageForVariant, { openaiContext: variant }, before),
+        oldRates,
+        `${model}/${variant} uses the previous rates 1 ms before the boundary`,
+      );
+      assert.deepEqual(
+        pricing.lookupOpenAIPrices(model, usageForVariant, { openaiContext: variant }, exact),
+        currentRates,
+        `${model}/${variant} uses the current rates at the boundary`,
+      );
+      assert.deepEqual(
+        pricing.lookupOpenAIPrices(model, usageForVariant, { openaiContext: variant }, after),
+        currentRates,
+        `${model}/${variant} uses the current rates after the boundary`,
+      );
+
+      for (const [timestamp, rates, label] of [
+        [before, oldRates, "historical"],
+        [exact, currentRates, "current"],
+      ]) {
+        const cost = pricing.calculateCost("openai", model, usageForVariant, timestamp, {
+          openaiContext: variant,
+          pricingCatalog,
+        });
+        assert.equal(cost.known, true, `${model}/${variant} ${label} catalog pricing is known`);
+        assert.deepEqual(
+          Object.fromEntries(Object.entries({
+            input: usageForVariant.input * rates.input / 1_000_000,
+            cacheCreate30m: usageForVariant.cacheCreate30m * rates.cacheCreate30m / 1_000_000,
+            cacheRead: usageForVariant.cacheRead * rates.cachedInput / 1_000_000,
+            output: usageForVariant.output * rates.output / 1_000_000,
+          }).map(([key, value]) => [key, Number(value.toFixed(6))])),
+          Object.fromEntries(Object.entries(cost.breakdown)
+            .filter(([key]) => ["input", "cacheCreate30m", "cacheRead", "output"].includes(key))
+            .map(([key, value]) => [key, Number(value.toFixed(6))])),
+          `${model}/${variant} ${label} catalog breakdown`,
+        );
+      }
+    }
+  }
+});
+
 test("unknown providers and models remain unpriced", () => {
   const usageValue = simpleUsage(1_000_000);
 

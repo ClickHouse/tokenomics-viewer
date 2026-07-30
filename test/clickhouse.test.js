@@ -336,7 +336,7 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-3:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -350,6 +350,71 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
       .filter((request) => request.query.trimStart().startsWith("INSERT INTO"));
     assert.equal(stable.revision, upgraded.revision);
     assert.equal(repeatedInserts.length, 0, "completed packaged upgrade must not replay pricing overlays");
+  });
+});
+
+test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows before the revision marker", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_temporal_packaged_upgrade_test" });
+    await loadConfiguration(options);
+
+    const legacyRevision = "legacy-packaged-3-temporal";
+    mock.activeRows.configuration_revisions[0].revision = legacyRevision;
+    for (const row of mock.activeRows.analytics_settings) {
+      row.revision = legacyRevision;
+      if (row.key === "pricingRevision") row.value_json = JSON.stringify("packaged-3");
+    }
+    const historicalUntil = "2026-07-29T23:59:59.999Z";
+    const currentFrom = "2026-07-30T00:00:00.000Z";
+    const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
+    const currentRows = new Map(mock.activeRows.pricing_catalog
+      .filter((row) => temporalModels.has(row.model) && row.effective_from === currentFrom)
+      .map((row) => [`${row.model}:${row.variant}`, row]));
+    mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
+      if (!temporalModels.has(row.model)) return [{ ...row, revision: legacyRevision }];
+      if (row.effective_until !== historicalUntil) return [];
+      const current = currentRows.get(`${row.model}:${row.variant}`);
+      return [{
+        ...row,
+        revision: legacyRevision,
+        row_id: `${row.provider}:${row.model}:${row.variant}`,
+        effective_from: "",
+        effective_until: "",
+        input: current.input,
+        cache_create_30m: current.cache_create_30m,
+        cache_read: current.cache_read,
+        output: current.output,
+      }];
+    });
+
+    const before = mock.requests.length;
+    const upgraded = await loadConfiguration(options);
+    const requests = mock.requests.slice(before);
+
+    assert.notEqual(upgraded.revision, legacyRevision);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
+    const temporalRows = upgraded.prices.filter((row) => temporalModels.has(row.model));
+    assert.equal(temporalRows.length, 8);
+    assert.equal(temporalRows.filter((row) => row.effectiveUntil === historicalUntil).length, 4);
+    assert.equal(temporalRows.filter((row) => row.effectiveFrom === currentFrom).length, 4);
+    assert.equal(temporalRows.filter((row) => !row.effectiveFrom && !row.effectiveUntil).length, 0);
+    assert.equal(temporalRows.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short" && row.effectiveUntil === historicalUntil).input, 1);
+    assert.equal(temporalRows.find((row) => row.model === "gpt-5.6-terra" && row.variant === "short" && row.effectiveUntil === historicalUntil).input, 2.5);
+    assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
+    const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
+    const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
+    const marker = requests.findIndex((request) => request.query.startsWith("INSERT INTO configuration_revisions"));
+    assert.ok(usageOverlay >= 0 && rateLimitOverlay > usageOverlay && marker > rateLimitOverlay);
+
+    const stableStart = mock.requests.length;
+    const stable = await loadConfiguration(options);
+    const repeatedInserts = mock.requests
+      .slice(stableStart)
+      .filter((request) => request.query.trimStart().startsWith("INSERT INTO"));
+    assert.equal(stable.revision, upgraded.revision);
+    assert.equal(repeatedInserts.length, 0, "completed temporal upgrade must not replay pricing overlays");
   });
 });
 

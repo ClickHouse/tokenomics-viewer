@@ -20,7 +20,7 @@ test("default configuration exposes a validated editable pricing catalog", () =>
   assert.equal(configuration.settings.pricingBasis, "standard");
   assert.equal(configuration.settings.regionalMultiplier, 1);
   assert.equal(configuration.settings.monthlyCostLimitUsd, null);
-  assert.equal(configuration.settings.pricingRevision, "packaged-3");
+  assert.equal(configuration.settings.pricingRevision, "packaged-4");
   assert.deepEqual(configuration.settings.usageProfile, {
     id: "default",
     name: "Work API",
@@ -54,13 +54,56 @@ test("default GPT-5.6 Luna and Terra rows match the current official standard ra
   for (const [model, variants] of Object.entries(expected)) {
     for (const [variant, rates] of Object.entries(variants)) {
       const row = configuration.prices.find((candidate) => (
-        candidate.provider === "openai" && candidate.model === model && candidate.variant === variant
+        candidate.provider === "openai" && candidate.model === model && candidate.variant === variant &&
+        candidate.effectiveFrom === "2026-07-30T00:00:00.000Z"
       ));
       assert.ok(row, `${model}/${variant} packaged row is present`);
       for (const [field, value] of Object.entries(rates)) {
         assert.equal(row[field], value, `${model}/${variant} ${field} rate`);
       }
       assert.equal(row.sourceUrl, "https://developers.openai.com/api/docs/pricing");
+    }
+  }
+});
+
+test("default GPT-5.6 Luna and Terra rows preserve the historical pricing boundary", () => {
+  const configuration = defaultConfiguration();
+  const oldUntil = "2026-07-29T23:59:59.999Z";
+  const currentFrom = "2026-07-30T00:00:00.000Z";
+  const expected = {
+    "gpt-5.6-terra": {
+      old: { input: 2.5, cacheRead: 0.25, cacheCreate30m: 3.125, output: 15 },
+      current: { input: 2, cacheRead: 0.2, cacheCreate30m: 2.5, output: 12 },
+    },
+    "gpt-5.6-luna": {
+      old: { input: 1, cacheRead: 0.1, cacheCreate30m: 1.25, output: 6 },
+      current: { input: 0.2, cacheRead: 0.02, cacheCreate30m: 0.25, output: 1.2 },
+    },
+  };
+
+  for (const [model, rates] of Object.entries(expected)) {
+    for (const variant of ["short", "long"]) {
+      const oldRates = variant === "long"
+        ? Object.fromEntries(Object.entries(rates.old).map(([key, value]) => [key, Number((value * (key === "output" ? 1.5 : 2)).toFixed(6))]))
+        : rates.old;
+      const currentRates = variant === "long"
+        ? Object.fromEntries(Object.entries(rates.current).map(([key, value]) => [key, Number((value * (key === "output" ? 1.5 : 2)).toFixed(6))]))
+        : rates.current;
+      const oldRow = configuration.prices.find((row) => (
+        row.provider === "openai" && row.model === model && row.variant === variant && row.effectiveUntil === oldUntil
+      ));
+      const currentRow = configuration.prices.find((row) => (
+        row.provider === "openai" && row.model === model && row.variant === variant && row.effectiveFrom === currentFrom
+      ));
+
+      assert.ok(oldRow, `${model}/${variant} historical packaged row is present`);
+      assert.ok(currentRow, `${model}/${variant} current packaged row is present`);
+      for (const [field, value] of Object.entries(oldRates)) {
+        assert.equal(oldRow[field], value, `${model}/${variant} historical ${field} rate`);
+      }
+      for (const [field, value] of Object.entries(currentRates)) {
+        assert.equal(currentRow[field], value, `${model}/${variant} current ${field} rate`);
+      }
     }
   }
 });
@@ -77,7 +120,7 @@ test("packaged-2 pricing is upgraded with Opus 5 without replacing persisted row
 
   const normalized = normalizeConfiguration(configuration);
 
-  assert.equal(normalized.settings.pricingRevision, "packaged-3");
+  assert.equal(normalized.settings.pricingRevision, "packaged-4");
   assert.equal(normalized.prices.find((row) => row.id === luna.id).input, 2);
   assert.ok(normalized.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
 });
@@ -94,7 +137,7 @@ test("packaged-1 pricing is upgraded with codex-auto-review without replacing pe
 
   const normalized = normalizeConfiguration(configuration);
 
-  assert.equal(normalized.settings.pricingRevision, "packaged-3");
+  assert.equal(normalized.settings.pricingRevision, "packaged-4");
   assert.equal(normalized.prices.find((row) => row.id === luna.id).input, 2);
   assert.ok(normalized.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review"));
 });
@@ -106,7 +149,7 @@ test("standard edited catalogs get a stable pricing-engine revision and auto-rev
 
   const normalized = normalizeConfiguration(configuration);
 
-  assert.match(normalized.settings.pricingRevision, /^packaged-3:[0-9a-f]{32}$/);
+  assert.match(normalized.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
   assert.equal(normalizeConfiguration(normalized).settings.pricingRevision, normalized.settings.pricingRevision);
   assert.ok(normalized.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review"));
 
