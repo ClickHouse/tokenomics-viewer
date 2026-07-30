@@ -38,6 +38,33 @@ test("default configuration exposes a validated editable pricing catalog", () =>
   assert.deepEqual(normalizeConfiguration(configuration), configuration);
 });
 
+test("default GPT-5.6 Luna and Terra rows match the current official standard rates", () => {
+  const configuration = defaultConfiguration();
+  const expected = {
+    "gpt-5.6-terra": {
+      short: { input: 2, cacheRead: 0.2, cacheCreate30m: 2.5, output: 12 },
+      long: { input: 4, cacheRead: 0.4, cacheCreate30m: 5, output: 18 },
+    },
+    "gpt-5.6-luna": {
+      short: { input: 0.2, cacheRead: 0.02, cacheCreate30m: 0.25, output: 1.2 },
+      long: { input: 0.4, cacheRead: 0.04, cacheCreate30m: 0.5, output: 1.8 },
+    },
+  };
+
+  for (const [model, variants] of Object.entries(expected)) {
+    for (const [variant, rates] of Object.entries(variants)) {
+      const row = configuration.prices.find((candidate) => (
+        candidate.provider === "openai" && candidate.model === model && candidate.variant === variant
+      ));
+      assert.ok(row, `${model}/${variant} packaged row is present`);
+      for (const [field, value] of Object.entries(rates)) {
+        assert.equal(row[field], value, `${model}/${variant} ${field} rate`);
+      }
+      assert.equal(row.sourceUrl, "https://developers.openai.com/api/docs/pricing");
+    }
+  }
+});
+
 test("packaged-2 pricing is upgraded with Opus 5 without replacing persisted rows", () => {
   const configuration = defaultConfiguration();
   configuration.revision = "packaged-2";
