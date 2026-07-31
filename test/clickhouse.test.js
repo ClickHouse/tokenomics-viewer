@@ -336,7 +336,7 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-4:managed:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -393,7 +393,7 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-4:managed:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     const temporalRows = upgraded.prices.filter((row) => temporalModels.has(row.model));
     assert.equal(temporalRows.length, 8);
@@ -415,6 +415,128 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
       .filter((request) => request.query.trimStart().startsWith("INSERT INTO"));
     assert.equal(stable.revision, upgraded.revision);
     assert.equal(repeatedInserts.length, 0, "completed temporal upgrade must not replay pricing overlays");
+  });
+});
+
+test("ClickHouse repairs a chained derived packaged migration only for an unchanged legacy catalog", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_chained_packaged_upgrade_test" });
+    await loadConfiguration(options);
+
+    const legacyRevision = "81fbbf48-6215-419b-bffb-ddd36a1e96d4";
+    const legacyPricingRevision = "packaged-4:fd7377f5073cecef6e9f9b83e190c1c4";
+    const historicalUntil = "2026-07-29T23:59:59.999Z";
+    const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
+    mock.activeRows.configuration_revisions[0].revision = legacyRevision;
+    for (const row of mock.activeRows.analytics_settings) {
+      row.revision = legacyRevision;
+      if (row.key === "pricingRevision") row.value_json = JSON.stringify(legacyPricingRevision);
+    }
+    mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
+      if (!temporalModels.has(row.model)) {
+        return [{
+          ...row,
+          revision: legacyRevision,
+          input: row.input === 0.6 ? 0.6000000000000001 : row.input,
+          cache_read: row.cache_read === 0.3
+            ? 0.30000000000000004
+            : row.cache_read === 0.175 ? 0.17500000000000004 : row.cache_read,
+        }];
+      }
+      if (row.effective_until !== historicalUntil) return [];
+      return [{
+        ...row,
+        revision: legacyRevision,
+        row_id: `${row.provider}:${row.model}:${row.variant}`,
+        effective_from: "",
+        effective_until: "",
+      }];
+    });
+
+    const before = mock.requests.length;
+    const upgraded = await loadConfiguration(options);
+    const requests = mock.requests.slice(before);
+    const temporalRows = upgraded.prices.filter((row) => temporalModels.has(row.model));
+
+    assert.notEqual(upgraded.revision, legacyRevision);
+    assert.equal(temporalRows.length, 8);
+    assert.equal(temporalRows.filter((row) => row.effectiveUntil === historicalUntil).length, 4);
+    assert.equal(temporalRows.filter((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z").length, 4);
+    assert.equal(temporalRows.filter((row) => !row.effectiveFrom && !row.effectiveUntil).length, 0);
+    assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
+    assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
+    assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")));
+    assert.match(upgraded.settings.pricingRevision, /^packaged-4:managed:[0-9a-f]{32}$/);
+
+    const stableStart = mock.requests.length;
+    assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
+    assert.equal(mock.requests.slice(stableStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
+  });
+});
+
+test("ClickHouse preserves edited standard rows while rebasing only older derived overlays", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_edited_derived_packaged_test" });
+    await loadConfiguration(options);
+
+    const legacyRevision = "81fbbf48-6215-419b-bffb-ddd36a1e96d4";
+    const legacyPricingRevision = "packaged-4:fd7377f5073cecef6e9f9b83e190c1c4";
+    const historicalUntil = "2026-07-29T23:59:59.999Z";
+    const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
+    mock.activeRows.configuration_revisions[0].revision = legacyRevision;
+    for (const row of mock.activeRows.analytics_settings) {
+      row.revision = legacyRevision;
+      if (row.key === "pricingRevision") row.value_json = JSON.stringify(legacyPricingRevision);
+    }
+    mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
+      if (!temporalModels.has(row.model)) return [{ ...row, revision: legacyRevision }];
+      if (row.effective_until !== historicalUntil) return [];
+      return [{
+        ...row,
+        revision: legacyRevision,
+        row_id: `${row.provider}:${row.model}:${row.variant}`,
+        effective_from: "",
+        effective_until: "",
+        input: row.model === "gpt-5.6-luna" && row.variant === "short" ? 99 : row.input,
+      }];
+    });
+
+    const before = mock.requests.length;
+    const preserved = await loadConfiguration(options);
+    const requests = mock.requests.slice(before);
+    const luna = preserved.prices.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short");
+
+    assert.equal(preserved.revision, legacyRevision);
+    assert.equal(preserved.settings.pricingRevision, legacyPricingRevision);
+    assert.equal(luna.input, 99);
+    assert.equal(preserved.prices.some((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z"), false);
+    assert.equal(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")), false);
+    assert.equal(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")), false);
+    assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO configuration_revisions")), false);
+
+    const stableStart = mock.requests.length;
+    assert.equal((await loadConfiguration(options)).revision, preserved.revision);
+    assert.equal(mock.requests.slice(stableStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
+
+    for (const row of mock.activeRows.analytics_settings) {
+      if (row.revision === legacyRevision && row.key === "pricingRevision") {
+        row.value_json = JSON.stringify("packaged-3:98676efa611fd1bf680b1262d5515820");
+      }
+    }
+    const rebaseStart = mock.requests.length;
+    const rebased = await loadConfiguration(options);
+    const rebaseRequests = mock.requests.slice(rebaseStart);
+    const rebasedLuna = rebased.prices.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short");
+
+    assert.notEqual(rebased.revision, legacyRevision);
+    assert.match(rebased.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.equal(rebasedLuna.input, 99);
+    assert.equal(rebased.prices.some((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z"), false);
+    assert.ok(rebaseRequests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
+    assert.ok(rebaseRequests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")));
+    assert.ok(rebaseRequests.some((request) => request.query.startsWith("INSERT INTO configuration_revisions")));
   });
 });
 

@@ -7,6 +7,7 @@ const Path = require("node:path");
 const test = require("node:test");
 const {
   defaultConfiguration,
+  isLegacyPackagedPricingCatalog,
   normalizeConfiguration,
 } = require("../lib/core/configuration");
 const { calculateCost } = require("../lib/core/pricing");
@@ -108,6 +109,19 @@ test("default GPT-5.6 Luna and Terra rows preserve the historical pricing bounda
   }
 });
 
+test("legacy packaged catalog recognition rejects even tiny tariff edits", () => {
+  const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
+  const legacy = defaultConfiguration().prices.flatMap((row) => {
+    if (!temporalModels.has(row.model)) return [row];
+    if (!row.effectiveUntil) return [];
+    return [{ ...row, effectiveFrom: null, effectiveUntil: null }];
+  });
+
+  assert.equal(isLegacyPackagedPricingCatalog(legacy), true);
+  legacy.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short").input = 1.000000000000001;
+  assert.equal(isLegacyPackagedPricingCatalog(legacy), false);
+});
+
 test("packaged-2 pricing is upgraded with Opus 5 without replacing persisted rows", () => {
   const configuration = defaultConfiguration();
   configuration.revision = "packaged-2";
@@ -157,6 +171,20 @@ test("standard edited catalogs get a stable pricing-engine revision and auto-rev
   const custom = normalizeConfiguration(configuration);
   assert.equal(custom.settings.pricingRevision, "edited-catalog-1");
   assert.equal(custom.prices.some((row) => row.model === "codex-auto-review"), false);
+});
+
+test("managed packaged overlay revisions remain distinct from edited standard catalogs", () => {
+  const configuration = defaultConfiguration();
+  const currentManagedRevision = `packaged-4:managed:${"a".repeat(32)}`;
+  configuration.settings.pricingRevision = currentManagedRevision;
+
+  assert.equal(normalizeConfiguration(configuration).settings.pricingRevision, currentManagedRevision);
+
+  configuration.settings.pricingRevision = `packaged-3:managed:${"b".repeat(32)}`;
+  assert.match(
+    normalizeConfiguration(configuration).settings.pricingRevision,
+    /^packaged-4:managed:[0-9a-f]{32}$/,
+  );
 });
 
 test("database pricing rows override packaged prices and apply the regional multiplier", () => {
