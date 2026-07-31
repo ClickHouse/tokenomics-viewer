@@ -7,8 +7,10 @@ const Path = require("node:path");
 const test = require("node:test");
 const {
   defaultConfiguration,
+  isCurrentPackagedPricingCatalog,
   isLegacyPackagedPricingCatalog,
   normalizeConfiguration,
+  packagedPricingCatalogRevision,
 } = require("../lib/core/configuration");
 const { calculateCost } = require("../lib/core/pricing");
 const { loadConfiguration, saveConfiguration } = require("../app");
@@ -118,8 +120,20 @@ test("legacy packaged catalog recognition rejects even tiny tariff edits", () =>
   });
 
   assert.equal(isLegacyPackagedPricingCatalog(legacy), true);
+  assert.equal(packagedPricingCatalogRevision(legacy), "packaged-3");
   legacy.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short").input = 1.000000000000001;
   assert.equal(isLegacyPackagedPricingCatalog(legacy), false);
+  assert.equal(packagedPricingCatalogRevision(legacy), "");
+});
+
+test("current packaged catalog recognition rejects even tiny tariff edits", () => {
+  const current = defaultConfiguration().prices;
+
+  assert.equal(isCurrentPackagedPricingCatalog(current), true);
+  assert.equal(packagedPricingCatalogRevision(current), "packaged-4");
+  current.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short" && row.effectiveFrom).input += Number.EPSILON;
+  assert.equal(isCurrentPackagedPricingCatalog(current), false);
+  assert.equal(packagedPricingCatalogRevision(current), "");
 });
 
 test("packaged-2 pricing is upgraded with Opus 5 without replacing persisted rows", () => {

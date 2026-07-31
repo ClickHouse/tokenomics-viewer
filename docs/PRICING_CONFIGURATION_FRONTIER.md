@@ -28,11 +28,15 @@ manual derivation-version discipline.
   SQLite and ClickHouse perform this migration without rereading source bytes;
   ClickHouse publishes cost overlays before its new revision marker. Custom and
   derived revisions are not overwritten by this migration.
-- ClickHouse uses an explicit `packaged-N:managed:<digest>` overlay revision to
-  retain packaged-catalog provenance across later upgrades. The legacy
+- ClickHouse retains packaged-catalog provenance in backend metadata while its
+  public pricing revision stays compatible with older readers. The legacy
   derived-hash repair is admitted only for the exact 63-row packaged-3 catalog
   snapshot, even if a prior engine bump rebased its revision prefix; any row
   difference remains an authoritative derived catalog.
+- ClickHouse pricing overlays evaluate temporal catalog rows against each
+  usage event timestamp. An internal projection revision invalidates and
+  rebuilds existing standard, derived, managed, and custom overlays when those
+  semantics change.
 - Direct scans without a database continue to use the packaged catalog.
 - Configuration reads return a revision. Writes require that revision and
   replace settings and prices atomically from the API consumer's perspective.
