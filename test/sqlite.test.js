@@ -240,6 +240,123 @@ test("pricing edits reprice SQLite reports immediately without reimporting uncha
   assert.deepEqual({ ...sourceAfter }, { ...sourceBefore });
 });
 
+test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows without reimport", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-packaged-pricing-upgrade-test-"));
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const jsonl = Path.join(tmp, "session.jsonl");
+  fs.writeFileSync(jsonl, "{}\n");
+  const options = defaultOptions({ db, paths: [jsonl] });
+
+  await syncDatabase(options);
+  const storedBefore = new DatabaseSync(db);
+  const sourceBefore = storedBefore.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
+  const currentRevision = storedBefore.prepare("SELECT revision FROM configuration_revisions ORDER BY committed_at_ms DESC LIMIT 1").get().revision;
+  storedBefore.prepare("UPDATE configuration_revisions SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3', value_json = ? WHERE revision = ? AND key = 'pricingRevision'").run(JSON.stringify("packaged-3"), currentRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("UPDATE pricing_catalog SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-3' AND model IN ('gpt-5.6-terra', 'gpt-5.6-luna')").run();
+  const insertLegacy = storedBefore.prepare(`
+    INSERT INTO pricing_catalog(
+      revision, row_id, provider, model, match_mode, variant,
+      effective_from, effective_until, input, cache_create_5m,
+      cache_create_30m, cache_create_1h, cache_read, output, source_url
+    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const [model, rates] of Object.entries({
+    "gpt-5.6-terra": { input: 2, cacheCreate30m: 2.5, cacheRead: 0.2, output: 12 },
+    "gpt-5.6-luna": { input: 0.2, cacheCreate30m: 0.25, cacheRead: 0.02, output: 1.2 },
+  })) {
+    for (const variant of ["short", "long"]) {
+      const scale = variant === "long" ? 2 : 1;
+      const outputScale = variant === "long" ? 1.5 : 1;
+      insertLegacy.run(
+        "packaged-3",
+        `openai:${model}:${variant}::`,
+        "openai",
+        model,
+        "snapshot",
+        variant,
+        null,
+        null,
+        rates.input * scale,
+        null,
+        rates.cacheCreate30m * scale,
+        null,
+        rates.cacheRead * scale,
+        rates.output * outputScale,
+        "https://developers.openai.com/api/docs/pricing",
+      );
+    }
+  }
+  storedBefore.close();
+
+  const migrated = await loadConfiguration(options);
+  assert.notEqual(migrated.revision, "packaged-3");
+  assert.equal(migrated.settings.pricingRevision, "packaged-4");
+  const targetRows = migrated.prices.filter((row) => row.provider === "openai" && ["gpt-5.6-terra", "gpt-5.6-luna"].includes(row.model));
+  assert.equal(targetRows.length, 8);
+  assert.equal(targetRows.filter((row) => row.effectiveUntil === "2026-07-29T23:59:59.999Z").length, 4);
+  assert.equal(targetRows.filter((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z").length, 4);
+  const historicalLuna = targetRows.find((row) => (
+    row.model === "gpt-5.6-luna" && row.variant === "short" &&
+    row.effectiveUntil === "2026-07-29T23:59:59.999Z"
+  ));
+  const historicalTerra = targetRows.find((row) => (
+    row.model === "gpt-5.6-terra" && row.variant === "short" &&
+    row.effectiveUntil === "2026-07-29T23:59:59.999Z"
+  ));
+  assert.deepEqual(
+    { input: historicalLuna.input, cacheCreate30m: historicalLuna.cacheCreate30m, cacheRead: historicalLuna.cacheRead, output: historicalLuna.output },
+    { input: 1, cacheCreate30m: 1.25, cacheRead: 0.1, output: 6 },
+  );
+  assert.deepEqual(
+    { input: historicalTerra.input, cacheCreate30m: historicalTerra.cacheCreate30m, cacheRead: historicalTerra.cacheRead, output: historicalTerra.output },
+    { input: 2.5, cacheCreate30m: 3.125, cacheRead: 0.25, output: 15 },
+  );
+
+  const storedAfter = new DatabaseSync(db);
+  try {
+    const sourceAfter = storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
+    assert.deepEqual({ ...sourceAfter }, { ...sourceBefore });
+    assert.equal(storedAfter.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 2);
+  } finally {
+    storedAfter.close();
+  }
+});
+
+test("SQLite leaves custom and derived pricing revisions untouched during packaged migration", async () => {
+  for (const pricingBasis of ["custom", "derived"]) {
+    const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), `tokenomics-sqlite-${pricingBasis}-pricing-test-`));
+    const db = Path.join(tmp, "tokenomics.sqlite");
+    const options = defaultOptions({ db });
+    const initial = await loadConfiguration(options);
+    const stored = new DatabaseSync(db);
+    const currentRevision = initial.revision;
+    const luna = stored.prepare("SELECT * FROM pricing_catalog WHERE revision = ? AND provider = 'openai' AND model = 'gpt-5.6-luna' AND variant = 'short' LIMIT 1").get(currentRevision);
+    const legacyRevision = pricingBasis === "custom" ? "custom-legacy" : "packaged-3:0123456789abcdef0123456789abcdef";
+    const storedPricingRevision = pricingBasis === "custom" ? "packaged-3" : legacyRevision;
+    stored.prepare("UPDATE configuration_revisions SET revision = ? WHERE revision = ?").run(legacyRevision, currentRevision);
+    stored.prepare("UPDATE analytics_settings SET revision = ?, value_json = ? WHERE revision = ? AND key = 'pricingBasis'").run(legacyRevision, JSON.stringify(pricingBasis === "custom" ? "custom" : "standard"), currentRevision);
+    stored.prepare("UPDATE analytics_settings SET revision = ?, value_json = ? WHERE revision = ? AND key = 'pricingRevision'").run(legacyRevision, JSON.stringify(storedPricingRevision), currentRevision);
+    stored.prepare("UPDATE analytics_settings SET revision = ? WHERE revision = ?").run(legacyRevision, currentRevision);
+    stored.prepare("UPDATE pricing_catalog SET revision = ?, input = ? WHERE revision = ? AND provider = 'openai' AND model = 'gpt-5.6-luna' AND variant = 'short'").run(legacyRevision, 99, currentRevision);
+    stored.prepare("UPDATE pricing_catalog SET revision = ? WHERE revision = ?").run(legacyRevision, currentRevision);
+    stored.close();
+
+    const loaded = await loadConfiguration(options);
+    assert.equal(loaded.revision, legacyRevision);
+    assert.equal(loaded.prices.find((row) => row.id === luna.row_id).input, 99);
+    assert.equal(loaded.prices.some((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z" && row.model === "gpt-5.6-luna"), true);
+    const check = new DatabaseSync(db);
+    try {
+      assert.equal(check.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 1);
+    } finally {
+      check.close();
+    }
+  }
+});
+
 test("SQLite persists versioned fingerprints and reimports a stale derivation", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-derivation-version-test-"));
   const jsonl = Path.join(tmp, "session.jsonl");
