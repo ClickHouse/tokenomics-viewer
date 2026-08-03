@@ -51,7 +51,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertFalse(transientWindow.isVisible)
         XCTAssertTrue(controller.window?.isVisible == true)
         XCTAssertEqual(controller.window?.title, "Settings")
-        XCTAssertEqual(controller.window?.contentLayoutRect.size, NSSize(width: 460, height: 400))
+        XCTAssertEqual(controller.window?.contentLayoutRect.size, NSSize(width: 460, height: 440))
 
         controller.close()
         transientWindow.close()
@@ -92,13 +92,15 @@ final class SettingsWindowControllerTests: XCTestCase {
 
         let initialHeight = view.fittingSize.height
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(300))
+        await coordinator.waitForCurrentOperation()
+        await Task.yield()
         view.layoutSubtreeIfNeeded()
         let connectedHeight = view.fittingSize.height
 
         client.isAvailable = false
         coordinator.refresh(triggerSync: false)
-        try await Task.sleep(for: .milliseconds(300))
+        await coordinator.waitForCurrentOperation()
+        await Task.yield()
         view.layoutSubtreeIfNeeded()
         let unavailableHeight = view.fittingSize.height
 
@@ -229,15 +231,46 @@ final class DirectLauncherTests: XCTestCase {
 }
 
 final class SummaryDecodingTests: XCTestCase {
+    func testDecodesNodeGeneratedSummaryContractFixture() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "summary-v1", withExtension: "json", subdirectory: "Fixtures"))
+        let response = try JSONDecoder().decode(SummaryResponse.self, from: Data(contentsOf: url))
+
+        XCTAssertEqual(response.contractVersion, 1)
+        XCTAssertEqual(response.currentMonth?.amountUSD, 34.5)
+        XCTAssertEqual(response.budget.todayScheduled, true)
+        XCTAssertEqual(response.budget.totalScheduledDays, 21)
+        XCTAssertEqual(response.budget.remainingScheduledDays, 21)
+        let allowance = try XCTUnwrap(response.budget.todayAllowanceUSD)
+        XCTAssertEqual(allowance, 70.0 / 21.0, accuracy: 1e-12)
+        XCTAssertEqual(response.budget.todayRemainingUSD, 0)
+        XCTAssertEqual(response.budget.allowanceBasis, "monthly_limit_minus_spend_through_yesterday_divided_by_remaining_weekdays_utc")
+    }
+
     func testDecodesExistingSummaryAndIgnoresAdditiveFields() throws {
         let json = """
         {
+          "contractVersion": 1,
           "generatedAt": "2026-08-03T09:00:00.000Z",
           "calendarTimeZone": "UTC",
           "usageProfile": {"id": "workday", "name": "Workday", "mode": "api"},
           "costSemantics": "estimated",
           "currentMonth": {"name": "2026-08", "through": "2026-08-03", "costUsd": 12.5, "limitUsd": 75},
           "daily": [{"name": "2026-08-03", "costUsd": 0}],
+          "budget": {
+            "todayScheduled": true,
+            "totalScheduledDays": 21,
+            "remainingScheduledDays": 20,
+            "limitUsd": 75,
+            "spentUsd": 12.5,
+            "remainingUsd": 62.5,
+            "overageUsd": 0,
+            "usedRatio": 0.1666666667,
+            "baselineDailyTargetUsd": 3.5714285714,
+            "todayAllowanceUsd": 3.75,
+            "todayRemainingUsd": 3.75,
+            "allowanceBasis": "server-owned-test-policy",
+            "status": "on-track"
+          },
           "configurationRevision": "c2",
           "pricingBasis": "list",
           "pricingStale": false,
@@ -249,7 +282,10 @@ final class SummaryDecodingTests: XCTestCase {
         XCTAssertEqual(response.currentDay(on: ISODate("2026-08-03"))?.amountUSD, 0)
         XCTAssertEqual(response.daily.first?.id, "2026-08-03")
         XCTAssertEqual(response.monthToDate?.amountUSD, 12.5)
+        XCTAssertEqual(response.contractVersion, 1)
         XCTAssertEqual(response.budget(on: ISODate("2026-08-03")).limitUSD, 75)
+        XCTAssertEqual(response.budget.todayAllowanceUSD, 3.75)
+        XCTAssertEqual(response.budget.allowanceBasis, "server-owned-test-policy")
         XCTAssertTrue(response.hasAnyUsageValue)
         XCTAssertTrue(response.providerModelEffortDaily.isEmpty)
     }
@@ -320,17 +356,50 @@ final class SummaryDecodingTests: XCTestCase {
     }
 
     func testScheduleAndSubscriptionBudgetSemantics() throws {
+        let serverBudget = BudgetInfo(
+            todayScheduled: false,
+            totalScheduledDays: 21,
+            remainingScheduledDays: 20,
+            limitUSD: 75,
+            spentUSD: 12,
+            remainingUSD: 63,
+            overageUSD: 0,
+            usedRatio: 0.16,
+            baselineDailyTargetUSD: 75 / 21,
+            todayAllowanceUSD: nil,
+            todayRemainingUSD: nil,
+            allowanceBasis: "server-owned-test-policy",
+            status: "unscheduled"
+        )
         let api = SummaryResponse(
+            usageProfile: UsageProfile(name: "Workday", mode: "api"),
+            currentMonth: UsagePeriod(amountUSD: 12, limitUSD: 75),
+            budget: serverBudget
+        )
+        let scheduled = api.budget(on: ISODate("2026-08-02"))
+        XCTAssertEqual(scheduled, serverBudget)
+
+        let compatibility = SummaryResponse(
             usageProfile: UsageProfile(name: "Workday", mode: "api"),
             currentMonth: UsagePeriod(amountUSD: 12, limitUSD: 75)
         )
-        let scheduled = api.budget(on: ISODate("2026-08-02"))
-        XCTAssertEqual(scheduled.todayScheduled, false)
-        XCTAssertEqual(scheduled.limitUSD, 75)
-        XCTAssertEqual(scheduled.status, "unscheduled")
-        let subscription = SummaryResponse(usageProfile: UsageProfile(name: "Pro", mode: "subscription"))
+        XCTAssertEqual(compatibility.budget.status, "server-policy-unavailable")
+        XCTAssertNil(compatibility.budget.todayScheduled)
+        XCTAssertNil(compatibility.budget.todayAllowanceUSD)
+
+        let subscription = SummaryResponse(
+            usageProfile: UsageProfile(name: "Pro", mode: "subscription"),
+            budget: BudgetInfo(status: "subscription")
+        )
         XCTAssertEqual(subscription.usageProfile?.mode, "subscription")
         XCTAssertNil(subscription.budget(on: ISODate("2026-08-03")).limitUSD)
+        XCTAssertEqual(subscription.budget.status, "subscription")
+    }
+
+    func testRejectsUnsupportedSummaryContractVersions() {
+        let json = #"{"contractVersion":2}"#
+
+        XCTAssertThrowsError(try JSONDecoder().decode(SummaryResponse.self, from: Data(json.utf8)))
     }
 
     func testChartSeriesFillsEverySettledDayInTheConfiguredMonth() {
@@ -416,10 +485,10 @@ final class CoordinatorSyncTests: XCTestCase {
         let client = CountingClient()
         let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(20))
+        await coordinator.waitForCurrentOperation()
         coordinator.refresh(triggerSync: true)
         coordinator.refresh(triggerSync: true)
-        try await Task.sleep(for: .milliseconds(300))
+        await coordinator.waitForCurrentOperation()
         XCTAssertLessThanOrEqual(client.maximumConcurrentSyncs, 1)
         coordinator.stop()
     }
@@ -432,7 +501,7 @@ final class CoordinatorSyncTests: XCTestCase {
         let client = CountingClient()
         let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(100))
+        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(client.syncRequestCount, 0)
         coordinator.stop()
     }
@@ -444,10 +513,10 @@ final class CoordinatorSyncTests: XCTestCase {
         let client = FlakySyncClient()
         let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(80))
+        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(coordinator.state, .connected)
         coordinator.refresh(triggerSync: true)
-        try await Task.sleep(for: .milliseconds(80))
+        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(coordinator.payload?.currentMonth?.amountUSD, 1)
         XCTAssertTrue(coordinator.lastErrorMessage?.contains("sync broke") == true)
         XCTAssertEqual(coordinator.state, .staleRetainingCache)
@@ -460,7 +529,7 @@ final class CoordinatorSyncTests: XCTestCase {
         let preferences = PreferencesStore(defaults: suite)
         let coordinator = ConnectionCoordinator(preferences: preferences, client: RunningZeroClient(), launcher: FailingLauncher())
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(80))
+        await coordinator.waitForCurrentOperation()
         XCTAssertNil(coordinator.payload)
         if case .syncing(lastGood: false) = coordinator.state {
             // Expected: an in-flight response cannot manufacture an initial $0.
@@ -481,7 +550,7 @@ final class CoordinatorSyncTests: XCTestCase {
         defer { coordinator.stop() }
 
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(80))
+        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(launcher.startCount, 0)
         XCTAssertTrue(coordinator.canStartTokenomics)
         guard case .unavailable = coordinator.state else {
@@ -490,7 +559,7 @@ final class CoordinatorSyncTests: XCTestCase {
         }
 
         coordinator.startTokenomics()
-        try await Task.sleep(for: .milliseconds(120))
+        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(launcher.startCount, 1)
         XCTAssertEqual(coordinator.state, .connected)
         coordinator.stop()
@@ -508,7 +577,7 @@ final class CoordinatorSyncTests: XCTestCase {
         let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
 
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(100))
+        await coordinator.waitForCurrentOperation()
 
         XCTAssertEqual(coordinator.state, .connected)
         XCTAssertEqual(launcher.startCount, 0)
@@ -527,9 +596,9 @@ final class CoordinatorSyncTests: XCTestCase {
         defer { coordinator.stop() }
 
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(80))
+        await coordinator.waitForCurrentOperation()
         coordinator.startTokenomics()
-        try await Task.sleep(for: .milliseconds(120))
+        await coordinator.waitForCurrentOperation()
         XCTAssertTrue(launcher.lastProcess?.isRunning == true)
 
         NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
@@ -543,16 +612,19 @@ final class CoordinatorSyncTests: XCTestCase {
         suite.removePersistentDomain(forName: suiteName)
         let preferences = PreferencesStore(defaults: suite)
         preferences.launcherPath = "/bin/sh"
+        let client = UnavailableClient()
         let coordinator = ConnectionCoordinator(
             preferences: preferences,
-            client: UnavailableClient(),
+            client: client,
             launcher: OutputLauncher(output: "[start] scanning local sessions\n")
         )
 
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(80))
+        await coordinator.waitForCurrentOperation()
+        let probe = expectation(description: "startup probes the configured endpoint")
+        client.onProbe = { probe.fulfill() }
         coordinator.startTokenomics()
-        try await Task.sleep(for: .milliseconds(100))
+        await fulfillment(of: [probe], timeout: 1)
 
         guard case .starting = coordinator.state else {
             XCTFail("expected startup to remain in progress")
@@ -573,12 +645,13 @@ final class CoordinatorSyncTests: XCTestCase {
         let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
 
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(100))
+        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(coordinator.state, .connected)
         XCTAssertNotNil(coordinator.payload)
 
         preferences.preferredPort = 8788
-        try await Task.sleep(for: .milliseconds(100))
+        await Task.yield()
+        await coordinator.waitForCurrentOperation()
 
         XCTAssertTrue(client.probedPorts.contains(8788))
         XCTAssertNil(coordinator.payload)
@@ -603,13 +676,13 @@ final class CoordinatorSyncTests: XCTestCase {
         let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
 
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(100))
+        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(coordinator.state, .connected)
         XCTAssertNotNil(coordinator.payload)
 
         client.isAvailable = false
         coordinator.refresh(triggerSync: false)
-        try await Task.sleep(for: .milliseconds(100))
+        await coordinator.waitForCurrentOperation()
 
         XCTAssertNil(coordinator.payload)
         XCTAssertNil(coordinator.lastGoodPayload)
@@ -719,7 +792,10 @@ private final class StartableClient: TokenomicsHTTPClient, @unchecked Sendable {
 }
 
 private final class UnavailableClient: TokenomicsHTTPClient, @unchecked Sendable {
+    var onProbe: (() -> Void)?
+
     func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        onProbe?()
         throw EndpointError.network("offline")
     }
 

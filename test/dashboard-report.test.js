@@ -35,6 +35,8 @@ test("dashboard summary exposes service modes as distinct analytics buckets", ()
 test("dashboard summary exposes the current UTC calendar month", () => {
   const report = newReport();
   report.monthlyCostLimitUsd = 100;
+  report.daily["2026-07-16"] = statsFixture({ costUsd: 30 });
+  report.daily["2026-07-17"] = statsFixture({ costUsd: 4.5 });
   report.monthly["2026-06"] = statsFixture({ costUsd: 12 });
   report.monthly["2026-07"] = statsFixture({
     requests: 9,
@@ -46,6 +48,7 @@ test("dashboard summary exposes the current UTC calendar month", () => {
 
   const summary = webSummary(report, defaultOptions({ now: new Date("2026-07-17T12:00:00.000Z") }));
 
+  assert.equal(summary.contractVersion, 1);
   assert.equal(summary.generatedAt, "2026-07-17T12:00:00.000Z");
   assert.equal(summary.calendarTimeZone, "UTC");
   assert.equal(summary.currentMonth.name, "2026-07");
@@ -58,6 +61,28 @@ test("dashboard summary exposes the current UTC calendar month", () => {
   assert.equal(summary.currentMonth.remainingUsd, 65.5);
   assert.equal(summary.currentMonth.overageUsd, 0);
   assert.equal(summary.currentMonth.usedRatio, 0.345);
+  assert.equal(summary.budget.todayScheduled, true);
+  assert.equal(summary.budget.totalScheduledDays, 23);
+  assert.equal(summary.budget.remainingScheduledDays, 11);
+  assert.equal(summary.budget.limitUsd, 100);
+  assert.equal(summary.budget.spentUsd, 34.5);
+  assert.ok(Math.abs(summary.budget.todayAllowanceUsd - (70 / 11)) < 1e-12);
+  assert.ok(Math.abs(summary.budget.todayRemainingUsd - ((70 / 11) - 4.5)) < 1e-12);
+  assert.equal(summary.budget.allowanceBasis, "monthly_limit_minus_spend_through_yesterday_divided_by_remaining_weekdays_utc");
+  assert.equal(summary.budget.status, "on-track");
+});
+
+test("dashboard budget marks UTC weekends as unscheduled", () => {
+  const report = newReport();
+  report.monthlyCostLimitUsd = 75;
+  report.monthly["2026-08"] = statsFixture({ costUsd: 10 });
+
+  const summary = webSummary(report, defaultOptions({ now: new Date("2026-08-02T12:00:00.000Z") }));
+
+  assert.equal(summary.budget.todayScheduled, false);
+  assert.equal(summary.budget.todayAllowanceUsd, null);
+  assert.equal(summary.budget.todayRemainingUsd, null);
+  assert.equal(summary.budget.status, "unscheduled");
 });
 
 test("dashboard summary chooses the billing month from UTC rather than local time", () => {
@@ -80,6 +105,10 @@ test("dashboard summary returns a zero current month when it has no usage", () =
   assert.equal(summary.currentMonth.name, "2026-07");
   assert.equal(summary.currentMonth.costUsd, 0);
   assert.equal(summary.currentMonth.limitUsd, null);
+  assert.equal(summary.budget.limitUsd, null);
+  assert.equal(summary.budget.todayAllowanceUsd, null);
+  assert.equal(summary.budget.allowanceBasis, "no_monthly_limit");
+  assert.equal(summary.budget.status, "no-limit");
   assert.equal(summary.currentMonth.remainingUsd, null);
   assert.equal(summary.currentMonth.overageUsd, null);
   assert.equal(summary.currentMonth.usedRatio, null);
@@ -137,6 +166,10 @@ test("subscription summary separates API equivalent from billed spend and expose
   assert.equal(summary.billedCostUsd, null);
   assert.equal(summary.apiEquivalentCostUsd, 12);
   assert.equal(summary.currentMonth.limitUsd, null);
+  assert.equal(summary.budget.limitUsd, null);
+  assert.equal(summary.budget.todayAllowanceUsd, null);
+  assert.equal(summary.budget.allowanceBasis, "no_monthly_limit");
+  assert.equal(summary.budget.status, "subscription");
   assert.equal(summary.subscriptionWindows.length, 1);
   assert.equal(summary.subscriptionWindows[0].windowMinutes, 10080);
   assert.equal(summary.subscriptionWindows[0].usedPercent, 40);

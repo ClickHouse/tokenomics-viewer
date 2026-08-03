@@ -50,7 +50,7 @@ public struct UsagePeriod: Decodable, Equatable, Sendable {
     }
 }
 
-public struct BudgetInfo: Equatable, Sendable {
+public struct BudgetInfo: Decodable, Equatable, Sendable {
     public var todayScheduled: Bool?
     public var totalScheduledDays: Int?
     public var remainingScheduledDays: Int?
@@ -95,6 +95,18 @@ public struct BudgetInfo: Equatable, Sendable {
         self.status = status
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case todayScheduled, totalScheduledDays, remainingScheduledDays
+        case limitUSD = "limitUsd"
+        case spentUSD = "spentUsd"
+        case remainingUSD = "remainingUsd"
+        case overageUSD = "overageUsd"
+        case usedRatio
+        case baselineDailyTargetUSD = "baselineDailyTargetUsd"
+        case todayAllowanceUSD = "todayAllowanceUsd"
+        case todayRemainingUSD = "todayRemainingUsd"
+        case allowanceBasis, status
+    }
 }
 
 public struct DailySpendPoint: Decodable, Equatable, Sendable, Identifiable {
@@ -217,6 +229,7 @@ public struct UsageProfile: Decodable, Equatable, Sendable {
 }
 
 public struct SummaryResponse: Decodable, Equatable, Sendable {
+    public var contractVersion: Int
     public var calendarTimeZone: String?
     public var usageProfile: UsageProfile?
     public var costSemantics: String?
@@ -231,13 +244,19 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
     public var pricingBasis: String?
     public var pricingStale: Bool?
     public var sync: SyncInfo
+    private var serverBudget: BudgetInfo?
 
-    /// Derived values intentionally stay in the renderer layer: the server's
-    /// summary is the source for costs and rows, while fixed weekday allowance
-    /// presentation is calculated here without touching logs or a database.
+    /// Policy values come from the Node service so native and web clients use
+    /// the same calendar, usage profile, and budget semantics.
     public var monthToDate: UsagePeriod? { currentMonth }
     public var today: UsagePeriod? { currentDay(on: Date()) }
-    public var budget: BudgetInfo { budget(on: Date()) }
+    public var budget: BudgetInfo {
+        serverBudget ?? BudgetInfo(
+            limitUSD: usageProfile?.mode?.lowercased() == "api" ? currentMonth?.limitUSD : nil,
+            spentUSD: currentMonth?.amountUSD,
+            status: "server-policy-unavailable"
+        )
+    }
     public var dashboardURL: URL? { nil }
 
     /// Returns a contiguous calendar-month series for the compact chart. The
@@ -284,6 +303,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
     }
 
     public init(
+        contractVersion: Int = 1,
         calendarTimeZone: String? = nil,
         usageProfile: UsageProfile? = nil,
         costSemantics: String? = nil,
@@ -297,8 +317,10 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         configurationRevision: String? = nil,
         pricingBasis: String? = nil,
         pricingStale: Bool? = nil,
+        budget: BudgetInfo? = nil,
         sync: SyncInfo = SyncInfo(state: .idle)
     ) {
+        self.contractVersion = contractVersion
         self.calendarTimeZone = calendarTimeZone
         self.usageProfile = usageProfile
         self.costSemantics = costSemantics
@@ -312,18 +334,29 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         self.configurationRevision = configurationRevision
         self.pricingBasis = pricingBasis
         self.pricingStale = pricingStale
+        serverBudget = budget
         self.sync = sync
     }
 
     private enum CodingKeys: String, CodingKey {
+        case contractVersion
         case generatedAt, calendarTimeZone, usageProfile, costSemantics
         case apiEquivalentCostUsd, billedCostUsd, total, currentMonth, daily
+        case budget
         case providerModelEffortDaily
         case configurationRevision, pricingBasis, pricingStale
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        contractVersion = try values.decodeIfPresent(Int.self, forKey: .contractVersion) ?? 1
+        guard contractVersion == 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .contractVersion,
+                in: values,
+                debugDescription: "Unsupported summary contract version \(contractVersion)"
+            )
+        }
         generatedAt = try values.decodeIfPresent(String.self, forKey: .generatedAt).flatMap(Self.parseDate)
         calendarTimeZone = try values.decodeIfPresent(String.self, forKey: .calendarTimeZone)
         usageProfile = try values.decodeIfPresent(UsageProfile.self, forKey: .usageProfile)
@@ -337,6 +370,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         configurationRevision = try values.decodeIfPresent(String.self, forKey: .configurationRevision)
         pricingBasis = try values.decodeIfPresent(String.self, forKey: .pricingBasis)
         pricingStale = try values.decodeIfPresent(Bool.self, forKey: .pricingStale)
+        serverBudget = try values.decodeIfPresent(BudgetInfo.self, forKey: .budget)
         sync = SyncInfo(state: .idle)
     }
 
@@ -385,56 +419,8 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         return UsagePeriod(date: key, name: key, amountUSD: 0)
     }
 
-    public func budget(on date: Date) -> BudgetInfo {
-        let scheduled = Self.isWeekday(date)
-        let rows = daily.filter { row in
-            let day = row.date
-            return day.hasPrefix(Self.monthKey(date)) && day <= Self.dateKey(date)
-        }
-        let spent = currentMonth?.amountUSD
-        let limit = usageProfile?.mode?.lowercased() == "api" ? currentMonth?.limitUSD : nil
-        let scheduledDays = Self.scheduledDays(in: date)
-        let remainingDays = scheduledDays.filter { $0 >= Self.dateKey(date) }.count
-        let spendThroughYesterday = rows.filter { $0.date < Self.dateKey(date) }.compactMap(\.amountUSD).reduce(0, +)
-        let allowance: Double?
-        if let limit, scheduled, remainingDays > 0 {
-            allowance = max(0, (limit - spendThroughYesterday) / Double(remainingDays))
-        } else {
-            allowance = nil
-        }
-        let remaining = allowance.flatMap { today in currentDay(on: date)?.amountUSD.map { max(0, today - $0) } }
-        let monthlyRemaining = limit.flatMap { value in spent.map { max(0, value - $0) } }
-        let overage = limit.flatMap { value in spent.map { max(0, $0 - value) } }
-        let status: String
-        if usageProfile?.mode?.lowercased() == "subscription" {
-            status = scheduled ? "subscription" : "subscription-unscheduled"
-        } else if limit == nil {
-            status = scheduled ? "no-limit" : "unscheduled"
-        } else if !scheduled {
-            status = "unscheduled"
-        } else if (overage ?? 0) > 0 {
-            status = "over-budget"
-        } else {
-            status = "on-track"
-        }
-        return BudgetInfo(
-            todayScheduled: scheduled,
-            totalScheduledDays: scheduledDays.count,
-            remainingScheduledDays: remainingDays,
-            limitUSD: limit,
-            spentUSD: spent,
-            remainingUSD: monthlyRemaining,
-            overageUSD: overage,
-            usedRatio: limit.flatMap { value in
-                guard value > 0 else { return nil }
-                return spent.map { $0 / value }
-            },
-            baselineDailyTargetUSD: limit.flatMap { value in scheduledDays.isEmpty ? nil : value / Double(scheduledDays.count) },
-            todayAllowanceUSD: allowance,
-            todayRemainingUSD: remaining,
-            allowanceBasis: limit == nil ? "no_monthly_limit" : "monthly_limit_minus_spend_through_yesterday_divided_by_remaining_weekdays",
-            status: status
-        )
+    public func budget(on _: Date) -> BudgetInfo {
+        budget
     }
 
     public var hasAnyUsageValue: Bool {
@@ -487,24 +473,6 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         return value
     }
 
-    private static func monthKey(_ date: Date) -> String { String(dateKey(date).prefix(7)) }
-
-    private static func isWeekday(_ date: Date) -> Bool {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        return (2...6).contains(calendar.component(.weekday, from: date))
-    }
-
-    private static func scheduledDays(in date: Date) -> [String] {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let components = calendar.dateComponents([.year, .month], from: date)
-        guard let start = calendar.date(from: components), let range = calendar.range(of: .day, in: .month, for: start) else { return [] }
-        return range.compactMap { day in
-            guard let current = calendar.date(byAdding: .day, value: day - 1, to: start), isWeekday(current) else { return nil }
-            return dateKey(current)
-        }
-    }
 }
 
 public enum ConnectionState: Equatable, Sendable {

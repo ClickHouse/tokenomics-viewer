@@ -4,12 +4,18 @@ on:
   pull_request:
     paths:
       - "mac/**"
+      - "lib/**"
+      - "scripts/generate-macos-summary-fixture.js"
+      - "test/macos-contract.test.js"
       - ".github/workflows/macos.yml"
   push:
     branches:
       - main
     paths:
       - "mac/**"
+      - "lib/**"
+      - "scripts/generate-macos-summary-fixture.js"
+      - "test/macos-contract.test.js"
       - ".github/workflows/macos.yml"
 
 permissions:
@@ -24,13 +30,21 @@ jobs:
     name: Swift tests and release build
     runs-on: macos-15
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: mac
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: Verify the Node to Swift contract fixture
+        run: |
+          node scripts/generate-macos-summary-fixture.js
+          git diff --exit-code -- mac/Tests/TokenomicsMenubarTests/Fixtures/summary-v1.json
+          node --test test/macos-contract.test.js
       - name: Run tests
         run: swift test -Xswiftc -warnings-as-errors
+        working-directory: mac
       - name: Build release executable
         run: swift build -c release -Xswiftc -warnings-as-errors
+        working-directory: mac

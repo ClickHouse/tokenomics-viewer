@@ -4,7 +4,7 @@ import SwiftUI
 @MainActor
 public final class SettingsWindowController: NSWindowController {
     public init(preferences: PreferencesStore) {
-        let contentSize = NSSize(width: 460, height: 400)
+        let contentSize = NSSize(width: 460, height: 440)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],

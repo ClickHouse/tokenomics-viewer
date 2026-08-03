@@ -26,6 +26,8 @@ The installer does not use `sudo` or install npm packages. On the first run it:
 
 1. Installs Tokenomics under `~/.local/share/tokenomics-viewer`.
 2. Adds launchers under `~/.local/bin`.
+   On macOS, it also records the launcher for the native menu bar client under
+   `~/Library/Application Support/Tokenomics Viewer`.
 3. Installs a private Node.js 26 runtime when the system Node.js is too old.
 4. Installs `clickhousectl`, selects stable ClickHouse, and starts the named
    `tokenomics` server.

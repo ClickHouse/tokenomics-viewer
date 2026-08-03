@@ -71,6 +71,13 @@ public final class ConnectionCoordinator: ObservableObject {
         refresh(triggerSync: preferences.automaticSyncEnabled)
     }
 
+    /// Test and lifecycle callers can await the currently scheduled refresh
+    /// without guessing how long network or process work will take.
+    func waitForCurrentOperation() async {
+        await Task.yield()
+        await operationTask?.value
+    }
+
     public func stop() {
         operationTask?.cancel()
         automaticTask?.cancel()

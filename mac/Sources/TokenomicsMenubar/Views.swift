@@ -589,12 +589,14 @@ public struct SettingsView: View {
     @ObservedObject var preferences: PreferencesStore
     private let onApply: () -> Void
     @State private var portText: String
+    @State private var launcherPathText: String
     @State private var intervalText: String
 
     public init(preferences: PreferencesStore, onApply: @escaping () -> Void = {}) {
         self.preferences = preferences
         self.onApply = onApply
         _portText = State(initialValue: String(preferences.preferredPort))
+        _launcherPathText = State(initialValue: preferences.launcherPath)
         _intervalText = State(initialValue: String(Int(preferences.automaticSyncInterval)))
     }
 
@@ -603,6 +605,14 @@ public struct SettingsView: View {
             Section("Connection") {
                 TextField("Preferred port", text: $portText)
                     .onSubmit { preferences.applyPortText(portText) }
+                HStack {
+                    TextField("Launcher fallback", text: $launcherPathText)
+                        .onSubmit { preferences.applyLauncherPath(launcherPathText) }
+                    Button("Choose…") { chooseLauncher() }
+                }
+                Text("The installer configures startup automatically. Choose an executable wrapper here only as a fallback.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Sync") {
                 Toggle("Automatic sync", isOn: $preferences.automaticSyncEnabled)
@@ -619,6 +629,7 @@ public struct SettingsView: View {
                 Spacer()
                 Button("Apply") {
                     preferences.applyPortText(portText)
+                    preferences.applyLauncherPath(launcherPathText)
                     if let value = Double(intervalText), RuntimePreferences.validInterval(value) {
                         preferences.automaticSyncInterval = value
                     }
@@ -630,5 +641,16 @@ public struct SettingsView: View {
         .formStyle(.grouped)
         .padding(12)
         .frame(width: 460)
+    }
+
+    private func chooseLauncher() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Launcher"
+        if panel.runModal() == .OK, let path = panel.url?.path {
+            launcherPathText = path
+        }
     }
 }

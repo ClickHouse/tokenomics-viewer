@@ -15,7 +15,8 @@ let package = Package(
         ),
         .testTarget(
             name: "TokenomicsMenubarTests",
-            dependencies: ["TokenomicsMenubar"]
+            dependencies: ["TokenomicsMenubar"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
