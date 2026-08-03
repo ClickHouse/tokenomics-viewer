@@ -9,10 +9,7 @@ query the database, or store usage data.
 
 ## Screenshot
 
-> Screenshot placeholder: add a cropped image at
-> `mac/docs/images/menu-bar-overview.png`, then replace this note with
-> `![Tokenomics menu bar client](docs/images/menu-bar-overview.png)`. Use sample
-> data and check the menu bar, desktop, and launcher log for private details.
+![Tokenomics menu bar client showing today's and month-to-date usage](docs/images/menu-bar-overview.png)
 
 ## Run from source
 
