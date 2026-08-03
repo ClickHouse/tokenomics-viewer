@@ -13,22 +13,13 @@ query the database, or store usage data.
 
 ## Run from source
 
-Start Tokenomics from the repository root:
-
-```sh
-node launcher.js --sqlite --no-open
-```
-
-Then run the native client in a second terminal:
-
 ```sh
 cd mac
 swift run TokenomicsMenubar
 ```
 
-The first Tokenomics sync may take longer than later refreshes. The client does
-not start Tokenomics automatically on first launch, so source testing should
-start the service first.
+App-managed startup requires a compatible saved launch command. Otherwise, the
+client connects to an already-running local Tokenomics service.
 
 Run the Swift checks from `mac/`:
 
@@ -39,27 +30,6 @@ swift build -c release
 
 This PR does not create or distribute an app bundle. Packaging, signing,
 notarization, and installation are separate rollout steps.
-
-## Connection and lifecycle
-
-The default port is `8787`. The client connects only to the configured local
-port and confirms that `GET /api/sync` returns a known Tokenomics state before
-using it.
-
-| Scenario | Behavior |
-| --- | --- |
-| First launch | The client checks the configured port. If Tokenomics is not running, it shows an offline state and does not start anything automatically. |
-| Tokenomics is already running | The client reuses it. It does not take ownership of that process and will not stop it. |
-| Tokenomics is started from the client | Start is always an explicit action and requires a valid launch command. The client owns that process and its children. |
-| The client quits or changes port | It stops only the Tokenomics process tree that it started. It does not stop ClickHouse or a Tokenomics instance it found already running. |
-| A sync fails but the service still responds | The last good totals stay visible and are marked as stale. |
-| The connection is lost | Cached totals are cleared, the client shows offline, and the user can retry. Automatic refresh also retries when enabled. |
-| Another service uses the port | The client does not treat it as Tokenomics or try to replace it. The user must choose another port or stop the other service. |
-| The Mac wakes from sleep | The client checks the service again and syncs if automatic sync is enabled. |
-
-Starting Tokenomics can include its initial local sync. The client shows bounded
-launcher output while it waits and gives up after 30 minutes. Canceling or
-failing startup stops the process tree it created.
 
 ## API and presentation
 
