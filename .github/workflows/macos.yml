@@ -1,0 +1,36 @@
+name: macOS client
+
+on:
+  pull_request:
+    paths:
+      - "mac/**"
+      - ".github/workflows/macos.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "mac/**"
+      - ".github/workflows/macos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-client-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Swift tests and release build
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mac
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Run tests
+        run: swift test -Xswiftc -warnings-as-errors
+      - name: Build release executable
+        run: swift build -c release -Xswiftc -warnings-as-errors
