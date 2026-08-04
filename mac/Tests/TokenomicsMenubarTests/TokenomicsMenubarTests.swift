@@ -1,9 +1,29 @@
 import AppKit
+import Combine
 import Darwin
 import Foundation
 import SwiftUI
 import XCTest
 @testable import TokenomicsMenubar
+
+@MainActor
+final class MinuteClockTests: XCTestCase {
+    func testClockPublishesInjectedMinuteTicks() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let tick = Date(timeIntervalSince1970: 1_060)
+        let updates = PassthroughSubject<Date, Never>()
+        let clock = MinuteClock(now: start, updates: updates.eraseToAnyPublisher())
+
+        var observed: [Date] = []
+        let observation = clock.$now.sink { observed.append($0) }
+        defer { observation.cancel() }
+
+        updates.send(tick)
+
+        XCTAssertEqual(clock.now, tick)
+        XCTAssertEqual(observed, [start, tick])
+    }
+}
 
 final class BudgetUsageLevelTests: XCTestCase {
     func testUsageLevelThresholds() {
@@ -121,6 +141,10 @@ final class SettingsWindowControllerTests: XCTestCase {
         let view = NSHostingView(
             rootView: PopoverView(
                 coordinator: coordinator,
+                clock: MinuteClock(
+                    now: Date(timeIntervalSince1970: 1_000),
+                    updates: Empty<Date, Never>().eraseToAnyPublisher()
+                ),
                 settingsWindowController: settings
             )
         )

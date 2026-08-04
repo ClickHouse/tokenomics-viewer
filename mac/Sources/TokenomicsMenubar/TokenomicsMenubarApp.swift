@@ -12,11 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct TokenomicsMenubar: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var coordinator: ConnectionCoordinator
+    @StateObject private var clock: MinuteClock
     private let settingsWindowController: SettingsWindowController
 
     init() {
         let prefs = PreferencesStore()
         _coordinator = StateObject(wrappedValue: ConnectionCoordinator(preferences: prefs))
+        _clock = StateObject(wrappedValue: MinuteClock())
         settingsWindowController = SettingsWindowController(preferences: prefs)
     }
 
@@ -24,10 +26,11 @@ struct TokenomicsMenubar: App {
         MenuBarExtra {
             PopoverView(
                 coordinator: coordinator,
+                clock: clock,
                 settingsWindowController: settingsWindowController
             )
         } label: {
-            MenuBarLabelView(coordinator: coordinator)
+            MenuBarLabelView(coordinator: coordinator, clock: clock)
         }
         .menuBarExtraStyle(.window)
     }
