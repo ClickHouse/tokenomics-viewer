@@ -146,27 +146,27 @@ enum MenuBarPresentation {
 
 public struct MenuBarLabelView: View {
     @ObservedObject var coordinator: ConnectionCoordinator
+    @ObservedObject private var clock: MinuteClock
     @ObservedObject private var preferences: PreferencesStore
 
-    public init(coordinator: ConnectionCoordinator) {
+    public init(coordinator: ConnectionCoordinator, clock: MinuteClock) {
         self.coordinator = coordinator
+        self.clock = clock
         _preferences = ObservedObject(wrappedValue: coordinator.preferences)
     }
 
     public var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            HStack(spacing: 4) {
-                if let text = labelText(now: context.date) {
-                    if coordinator.state.isUsable == false { Image(systemName: iconName).accessibilityHidden(true) }
-                    Text(text)
-                } else {
-                    Image(systemName: iconName).accessibilityHidden(true)
-                    Text(stateLabel)
-                }
+        HStack(spacing: 4) {
+            if let text = labelText(now: clock.now) {
+                if coordinator.state.isUsable == false { Image(systemName: iconName).accessibilityHidden(true) }
+                Text(text)
+            } else {
+                Image(systemName: iconName).accessibilityHidden(true)
+                Text(stateLabel)
             }
-            .accessibilityLabel(accessibilityText(now: context.date))
-            .help(accessibilityText(now: context.date))
         }
+        .accessibilityLabel(accessibilityText(now: clock.now))
+        .help(accessibilityText(now: clock.now))
         .font(.system(size: 12, weight: .medium, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(labelColor)
@@ -222,14 +222,17 @@ public struct MenuBarLabelView: View {
 
 public struct PopoverView: View {
     @ObservedObject var coordinator: ConnectionCoordinator
+    @ObservedObject private var clock: MinuteClock
     private let settingsWindowController: SettingsWindowController
     @State private var showDetails = false
 
     public init(
         coordinator: ConnectionCoordinator,
+        clock: MinuteClock,
         settingsWindowController: SettingsWindowController
     ) {
         self.coordinator = coordinator
+        self.clock = clock
         self.settingsWindowController = settingsWindowController
     }
 
@@ -319,15 +322,13 @@ public struct PopoverView: View {
     private var quotaSection: some View {
         let windows = QuotaPresentation.orderedWindows(payload?.subscriptionWindows ?? [])
         if !windows.isEmpty {
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                if windows.count > 4 {
-                    ScrollView {
-                        QuotaCockpitView(windows: windows, now: context.date)
-                    }
-                    .frame(maxHeight: 180)
-                } else {
-                    QuotaCockpitView(windows: windows, now: context.date)
+            if windows.count > 4 {
+                ScrollView {
+                    QuotaCockpitView(windows: windows, now: clock.now)
                 }
+                .frame(maxHeight: 180)
+            } else {
+                QuotaCockpitView(windows: windows, now: clock.now)
             }
             Divider()
         }
