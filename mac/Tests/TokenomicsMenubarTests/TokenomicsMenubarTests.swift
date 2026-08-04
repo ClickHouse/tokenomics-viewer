@@ -309,6 +309,55 @@ final class DirectLauncherTests: XCTestCase {
     }
 }
 
+final class LauncherConfigurationStoreTests: XCTestCase {
+    func testFindsTheStandardInstalledLauncherWithoutPersistedConfiguration() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let launcher = home.appendingPathComponent(".local/bin/tokenomics-launch")
+        try FileManager.default.createDirectory(
+            at: launcher.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("#!/bin/sh\n".utf8).write(to: launcher)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let configuration = LauncherConfigurationStore.resolveConfiguration(
+            fallbackPath: "",
+            persistedURL: home.appendingPathComponent("missing.json"),
+            homeDirectory: home,
+            executableURL: nil
+        )
+
+        XCTAssertEqual(configuration, PersistedLauncherConfiguration(command: launcher.path))
+    }
+
+    func testSwiftRunFindsTheRepositoryLauncherFromTheExecutableAncestors() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let launcher = root.appendingPathComponent("launcher.js")
+        let executable = root.appendingPathComponent("mac/.build/debug/TokenomicsMenubar")
+        try FileManager.default.createDirectory(
+            at: executable.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("#!/usr/bin/env node\n".utf8).write(to: launcher)
+        try Data().write(to: root.appendingPathComponent("app.js"))
+        try Data().write(to: root.appendingPathComponent("mac/Package.swift"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configuration = LauncherConfigurationStore.resolveConfiguration(
+            fallbackPath: "",
+            persistedURL: root.appendingPathComponent("missing.json"),
+            homeDirectory: root.appendingPathComponent("empty-home"),
+            executableURL: executable
+        )
+
+        XCTAssertEqual(configuration, PersistedLauncherConfiguration(command: launcher.path))
+    }
+}
+
 final class SummaryDecodingTests: XCTestCase {
     func testDecodesNodeGeneratedSummaryContractFixture() throws {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "summary-v1", withExtension: "json", subdirectory: "Fixtures"))
@@ -637,10 +686,14 @@ final class CoordinatorSyncTests: XCTestCase {
         let suite = UserDefaults(suiteName: "TokenomicsMenubarTests.explicit-start")!
         suite.removePersistentDomain(forName: "TokenomicsMenubarTests.explicit-start")
         let preferences = PreferencesStore(defaults: suite)
-        preferences.launcherPath = "/bin/sh"
         let client = StartableClient()
         let launcher = RecordingLauncher(client: client)
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
         defer { coordinator.stop() }
 
         coordinator.start()

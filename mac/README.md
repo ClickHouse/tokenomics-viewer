@@ -13,14 +13,12 @@ budget policy; the Swift app consumes its versioned summary contract.
 
 ## Run from source
 
-Run the repository's one-line installer first. On macOS it atomically writes
-`~/Library/Application Support/Tokenomics Viewer/tokenomics-launch.json`, so
-the app can start the installed `tokenomics-launch` wrapper when the configured
-loopback service is offline. On launch, wake, and refresh, the app probes that
-exact endpoint and starts the wrapper with `--no-open` only when no Tokenomics
-service answers. It does not replace an unrelated service occupying the port,
-and only **Open Dashboard** opens a browser. A source-only setup can select an
-executable wrapper in **Settings → Launcher fallback**.
+On launch, wake, and refresh, the app probes the configured loopback endpoint.
+If Tokenomics is offline, it starts the backend with `--no-open`. It resolves the
+launcher from the installer's persisted command, an explicit **Settings →
+Launcher fallback**, the current source checkout when run with `swift run`, or
+`~/.local/bin/tokenomics-launch`. It does not replace an unrelated service
+occupying the port, and only **Open Dashboard** opens a browser.
 
 ```sh
 cd mac

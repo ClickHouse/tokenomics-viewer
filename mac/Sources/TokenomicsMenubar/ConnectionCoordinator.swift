@@ -17,6 +17,7 @@ public final class ConnectionCoordinator: ObservableObject {
 
     private let client: any TokenomicsHTTPClient
     private let launcher: any TokenomicsLauncher
+    private let launcherConfigurationResolver: @MainActor (String) -> PersistedLauncherConfiguration?
     private var launcherProcess: (any TokenomicsProcessHandle)?
     private var operationTask: Task<Void, Never>?
     private var automaticTask: Task<Void, Never>?
@@ -31,11 +32,15 @@ public final class ConnectionCoordinator: ObservableObject {
     public init(
         preferences: PreferencesStore = PreferencesStore(),
         client: any TokenomicsHTTPClient = URLSessionTokenomicsClient(),
-        launcher: any TokenomicsLauncher = DirectTokenomicsLauncher()
+        launcher: any TokenomicsLauncher = DirectTokenomicsLauncher(),
+        launcherConfigurationResolver: @escaping @MainActor (String) -> PersistedLauncherConfiguration? = {
+            LauncherConfigurationStore.resolveConfiguration(fallbackPath: $0)
+        }
     ) {
         self.preferences = preferences
         self.client = client
         self.launcher = launcher
+        self.launcherConfigurationResolver = launcherConfigurationResolver
         self.observedPreferredPort = preferences.preferredPort
         observedWake = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
@@ -331,14 +336,7 @@ public final class ConnectionCoordinator: ObservableObject {
     }
 
     private func launcherConfiguration() -> PersistedLauncherConfiguration? {
-        // The CLI's persisted command includes the interpreter/script argument
-        // when needed. Prefer it so a launch never loses that argv contract.
-        if let persisted = LauncherConfigurationStore.readConfiguration() { return persisted }
-        guard RuntimePreferences.validAbsolutePath(preferences.launcherPath),
-              !preferences.launcherPath.isEmpty,
-              FileManager.default.isExecutableFile(atPath: preferences.launcherPath)
-        else { return nil }
-        return PersistedLauncherConfiguration(command: preferences.launcherPath)
+        launcherConfigurationResolver(preferences.launcherPath)
     }
 
     private func syncAndWait(at endpoint: Endpoint, generation: Int) async throws -> SyncProbe {
