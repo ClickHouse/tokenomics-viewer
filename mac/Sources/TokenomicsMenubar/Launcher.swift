@@ -260,4 +260,55 @@ public enum LauncherConfigurationStore {
     public static func read(from url: URL = defaultURL) -> String? {
         readConfiguration(from: url)?.command
     }
+
+    /// Resolve the backend launcher without requiring a separate menu-bar
+    /// preference. Installed applications use the stable wrapper under
+    /// ~/.local/bin; `swift run` uses the launcher from the source checkout.
+    public static func resolveConfiguration(
+        fallbackPath: String,
+        persistedURL: URL = defaultURL,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        executableURL: URL? = Bundle.main.executableURL
+    ) -> PersistedLauncherConfiguration? {
+        if let persisted = readConfiguration(from: persistedURL) { return persisted }
+        if let fallback = executableConfiguration(atPath: fallbackPath) { return fallback }
+        if let development = developmentConfiguration(executableURL: executableURL) { return development }
+        return executableConfiguration(
+            atPath: homeDirectory
+                .appendingPathComponent(".local/bin/tokenomics-launch")
+                .path
+        )
+    }
+
+    private static func developmentConfiguration(executableURL: URL?) -> PersistedLauncherConfiguration? {
+        guard let executableURL else { return nil }
+        var directory = executableURL.deletingLastPathComponent().standardizedFileURL
+        let fileManager = FileManager.default
+
+        // A SwiftPM executable lives below mac/.build. Walk only its ancestor
+        // chain and require the repository shape before trusting launcher.js.
+        for _ in 0..<12 {
+            let launcher = directory.appendingPathComponent("launcher.js")
+            let app = directory.appendingPathComponent("app.js")
+            let package = directory.appendingPathComponent("mac/Package.swift")
+            if fileManager.fileExists(atPath: app.path),
+               fileManager.fileExists(atPath: package.path),
+               let configuration = executableConfiguration(atPath: launcher.path)
+            {
+                return configuration
+            }
+            let parent = directory.deletingLastPathComponent()
+            if parent.path == directory.path { break }
+            directory = parent
+        }
+        return nil
+    }
+
+    private static func executableConfiguration(atPath path: String) -> PersistedLauncherConfiguration? {
+        guard RuntimePreferences.validAbsolutePath(path),
+              !path.isEmpty,
+              FileManager.default.isExecutableFile(atPath: path)
+        else { return nil }
+        return PersistedLauncherConfiguration(command: path)
+    }
 }

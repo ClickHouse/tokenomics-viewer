@@ -17,9 +17,15 @@ struct TokenomicsMenubar: App {
 
     init() {
         let prefs = PreferencesStore()
-        _coordinator = StateObject(wrappedValue: ConnectionCoordinator(preferences: prefs))
+        let coordinator = ConnectionCoordinator(preferences: prefs)
+        _coordinator = StateObject(wrappedValue: coordinator)
         _clock = StateObject(wrappedValue: MinuteClock())
         settingsWindowController = SettingsWindowController(preferences: prefs)
+
+        // A MenuBarExtra label is not guaranteed to enter the SwiftUI view
+        // hierarchy before the user opens it. Start from the application
+        // lifecycle so the backend is available without that first click.
+        coordinator.start()
     }
 
     var body: some Scene {
