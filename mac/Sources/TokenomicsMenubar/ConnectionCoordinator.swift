@@ -114,29 +114,28 @@ public final class ConnectionCoordinator: ObservableObject {
     /// A user-initiated refresh always asks the backend to coalesce a sync,
     /// even when automatic sync is disabled.
     public func refresh(triggerSync: Bool = true) {
-        refresh(triggerSync: triggerSync, allowLaunch: false)
+        scheduleRefresh(triggerSync: triggerSync)
     }
 
     public func startTokenomics() {
         guard canStartTokenomics, !isRefreshing else { return }
         launcherProcess?.stop()
         launcherProcess = nil
-        refresh(triggerSync: true, allowLaunch: true)
+        scheduleRefresh(triggerSync: true)
     }
 
     public var canStartTokenomics: Bool {
         launcherConfiguration() != nil
     }
 
-    private func refresh(triggerSync: Bool, allowLaunch: Bool) {
+    private func scheduleRefresh(triggerSync: Bool) {
         operationTask?.cancel()
         operationGeneration += 1
         let generation = operationGeneration
         operationTask = Task { @MainActor [weak self] in
             await self?.runRefresh(
                 generation: generation,
-                triggerSync: triggerSync,
-                allowLaunch: allowLaunch
+                triggerSync: triggerSync
             )
         }
     }
@@ -152,9 +151,9 @@ public final class ConnectionCoordinator: ObservableObject {
     public func wake() {
         guard automaticStarted else { return }
         if preferences.automaticSyncEnabled {
-            refresh(triggerSync: true)
+            scheduleRefresh(triggerSync: true)
         } else {
-            refresh(triggerSync: false)
+            scheduleRefresh(triggerSync: false)
         }
     }
 
@@ -173,21 +172,18 @@ public final class ConnectionCoordinator: ObservableObject {
             seenUTCDate = today
             guard preferences.automaticSyncEnabled || rolledOver else { continue }
             if isRefreshing { continue }
-            refresh(triggerSync: preferences.automaticSyncEnabled)
+            scheduleRefresh(triggerSync: preferences.automaticSyncEnabled)
         }
     }
 
-    private func runRefresh(generation: Int, triggerSync: Bool, allowLaunch: Bool) async {
+    private func runRefresh(generation: Int, triggerSync: Bool) async {
         isRefreshing = true
         defer {
             if generation == operationGeneration { isRefreshing = false }
         }
         state = .finding
         do {
-            let discovery = try await findOrStartEndpoint(
-                generation: generation,
-                allowLaunch: allowLaunch
-            )
+            let discovery = try await findOrStartEndpoint(generation: generation)
             guard isCurrent(generation) else { return }
             let selected = discovery.endpoint
             endpoint = selected
@@ -239,10 +235,7 @@ public final class ConnectionCoordinator: ObservableObject {
         }
     }
 
-    private func findOrStartEndpoint(
-        generation: Int,
-        allowLaunch: Bool
-    ) async throws -> (endpoint: Endpoint, launched: Bool) {
+    private func findOrStartEndpoint(generation: Int) async throws -> (endpoint: Endpoint, launched: Bool) {
         let ordered = PortDiscovery.orderedEndpoints(preferred: preferences.preferredPort, active: preferences.activeEndpoint)
         guard let candidate = ordered.first else {
             throw EndpointError.network("The configured Tokenomics port is invalid.")
@@ -261,9 +254,15 @@ public final class ConnectionCoordinator: ObservableObject {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            guard allowLaunch else {
-                throw EndpointError.network("Tokenomics is unavailable on port \(candidate.port).")
+            // No Tokenomics service answered on the exact configured endpoint;
+            // fall through to the configured launcher.
+        }
+
+        if let launcherProcess {
+            guard !launcherProcess.isRunning else {
+                throw EndpointError.network("The Tokenomics launcher is running, but its service is not ready on port \(candidate.port).")
             }
+            self.launcherProcess = nil
         }
 
         guard let launchConfiguration = launcherConfiguration() else {

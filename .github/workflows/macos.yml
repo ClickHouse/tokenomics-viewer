@@ -40,7 +40,7 @@ jobs:
       - name: Verify the Node to Swift contract fixture
         run: |
           node scripts/generate-macos-summary-fixture.js
-          git diff --exit-code -- mac/Tests/TokenomicsMenubarTests/Fixtures/summary-v1.json
+          git diff --exit-code -- mac/Tests/TokenomicsMenubarTests/Fixtures
           node --test test/macos-contract.test.js
       - name: Run tests
         run: swift test -Xswiftc -warnings-as-errors

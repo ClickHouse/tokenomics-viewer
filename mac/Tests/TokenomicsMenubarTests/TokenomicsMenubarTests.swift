@@ -15,6 +15,45 @@ final class BudgetUsageLevelTests: XCTestCase {
     }
 }
 
+final class QuotaPresentationTests: XCTestCase {
+    func testQuotaLabelsAndCountdownUseInjectedClock() {
+        let now = ISO8601DateFormatter().date(from: "2026-08-03T12:00:00Z")!
+        let reset = ISO8601DateFormatter().date(from: "2026-08-03T13:24:00Z")!
+        let window = SubscriptionWindow(
+            key: "codex/primary",
+            provider: "openai",
+            windowMinutes: 300,
+            usedPercent: 68,
+            remainingPercent: 32,
+            resetAt: reset
+        )
+
+        XCTAssertEqual(QuotaPresentation.windowLabel(minutes: 300), "5-hour")
+        XCTAssertEqual(QuotaPresentation.windowLabel(minutes: 10_080), "Weekly")
+        XCTAssertEqual(QuotaPresentation.windowTitle(window), "OpenAI · 5-hour")
+        XCTAssertEqual(QuotaPresentation.resetCountdown(resetAt: reset, now: now), "Resets in 1h 24m")
+        XCTAssertEqual(QuotaPresentation.resetCountdown(resetAt: reset, now: reset), "Reset pending")
+
+        let payload = SummaryResponse(
+            usageProfile: UsageProfile(name: "ChatGPT Pro", mode: "subscription"),
+            costSemantics: "api-equivalent",
+            subscriptionWindows: [window],
+            currentMonth: UsagePeriod(name: "2026-08", through: "2026-08-03", amountUSD: 18.42),
+            daily: [DailySpendPoint(date: "2026-08-03", amountUSD: 18.42)]
+        )
+        XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .today, now: now), "Today eq. $18.42")
+        XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .quotaUsed, now: now), "5h 68%")
+        XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .quotaReset, now: now), "5h 1h 24m")
+    }
+
+    func testInvalidPercentIsNotPresentedAsQuota() {
+        let window = SubscriptionWindow(key: "invalid", windowMinutes: 300, usedPercent: .infinity)
+        XCTAssertNil(QuotaPresentation.shortestWindow([window]))
+        XCTAssertEqual(QuotaPresentation.normalizedPercent(-10), 0)
+        XCTAssertEqual(QuotaPresentation.normalizedPercent(120), 100)
+    }
+}
+
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
     func testAppUsesAnActivatableAccessoryPolicy() {
@@ -153,6 +192,22 @@ final class DirectLauncherTests: XCTestCase {
         XCTAssertTrue(process.output.contains("starting initial sync"))
     }
 
+    func testAppendsNoOpenAndConfiguredPortToLauncherArguments() async throws {
+        let process = try await DirectTokenomicsLauncher().start(
+            executablePath: "/bin/sh",
+            port: 9123,
+            timeout: .seconds(2),
+            baseArguments: ["-c", "printf '%s\\n' \"$@\"; sleep 1", "sh"]
+        )
+        defer { process.stop() }
+
+        for _ in 0..<40 where !process.output.contains("9123") {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+
+        XCTAssertEqual(process.output.split(separator: "\n").map(String.init), ["--no-open", "--port", "9123"])
+    }
+
     func testStopTerminatesTheLauncherProcessGroup() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -244,6 +299,19 @@ final class SummaryDecodingTests: XCTestCase {
         XCTAssertEqual(allowance, 70.0 / 21.0, accuracy: 1e-12)
         XCTAssertEqual(response.budget.todayRemainingUSD, 0)
         XCTAssertEqual(response.budget.allowanceBasis, "monthly_limit_minus_spend_through_yesterday_divided_by_remaining_weekdays_utc")
+    }
+
+    func testDecodesNodeGeneratedSubscriptionQuotaFixture() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "summary-v1-subscription", withExtension: "json", subdirectory: "Fixtures"))
+        let response = try JSONDecoder().decode(SummaryResponse.self, from: Data(contentsOf: url))
+
+        XCTAssertEqual(response.usageProfile?.mode, "subscription")
+        XCTAssertEqual(response.costSemantics, "api-equivalent")
+        XCTAssertNil(response.billedCostUSD)
+        XCTAssertEqual(response.subscriptionWindows.map(\.windowMinutes), [300, 10_080])
+        XCTAssertEqual(response.subscriptionWindows.map(\.usedPercent), [68, 41])
+        XCTAssertEqual(response.subscriptionWindows.first?.resetAt, ISO8601DateFormatter().date(from: "2026-08-03T13:24:00Z"))
+        XCTAssertNil(response.subscriptionWindows.first?.projectedFullWindowApiEquivalentUSD)
     }
 
     func testDecodesExistingSummaryAndIgnoresAdditiveFields() throws {
@@ -450,10 +518,12 @@ final class PortAndPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.automaticSyncInterval, 20)
         preferences.automaticSyncEnabled = false
         preferences.automaticSyncInterval = 1
+        preferences.menuBarLabelMode = .quotaReset
         preferences.save(to: suite)
         let loaded = RuntimePreferences(defaults: suite)
         XCTAssertFalse(loaded.automaticSyncEnabled)
         XCTAssertEqual(loaded.automaticSyncInterval, 20)
+        XCTAssertEqual(loaded.menuBarLabelMode, .quotaReset)
     }
 
     @MainActor
@@ -539,7 +609,7 @@ final class CoordinatorSyncTests: XCTestCase {
         coordinator.stop()
     }
 
-    func testUnavailableDoesNotStartLauncherUntilExplicitRequest() async throws {
+    func testUnavailableStartsLauncherAutomatically() async throws {
         let suite = UserDefaults(suiteName: "TokenomicsMenubarTests.explicit-start")!
         suite.removePersistentDomain(forName: "TokenomicsMenubarTests.explicit-start")
         let preferences = PreferencesStore(defaults: suite)
@@ -551,18 +621,9 @@ final class CoordinatorSyncTests: XCTestCase {
 
         coordinator.start()
         await coordinator.waitForCurrentOperation()
-        XCTAssertEqual(launcher.startCount, 0)
-        XCTAssertTrue(coordinator.canStartTokenomics)
-        guard case .unavailable = coordinator.state else {
-            XCTFail("expected unavailable state")
-            return
-        }
-
-        coordinator.startTokenomics()
-        await coordinator.waitForCurrentOperation()
         XCTAssertEqual(launcher.startCount, 1)
+        XCTAssertTrue(coordinator.canStartTokenomics)
         XCTAssertEqual(coordinator.state, .connected)
-        coordinator.stop()
     }
 
     func testAlreadyRunningTokenomicsIsReusedWithoutTakingOwnership() async throws {
@@ -584,6 +645,27 @@ final class CoordinatorSyncTests: XCTestCase {
         coordinator.stop()
     }
 
+    func testWrongServiceIsNotReplacedByTheLauncher() async throws {
+        let suiteName = "TokenomicsMenubarTests.wrong-service"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        preferences.launcherPath = "/bin/sh"
+        let launcher = UnexpectedLauncher()
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: WrongServiceClient(),
+            launcher: launcher
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(launcher.startCount, 0)
+        XCTAssertEqual(coordinator.state, .notTokenomics(endpoint: Endpoint(port: 8787)))
+    }
+
     func testApplicationTerminationStopsTokenomicsStartedByTheApp() async throws {
         let suiteName = "TokenomicsMenubarTests.application-termination"
         let suite = UserDefaults(suiteName: suiteName)!
@@ -596,8 +678,6 @@ final class CoordinatorSyncTests: XCTestCase {
         defer { coordinator.stop() }
 
         coordinator.start()
-        await coordinator.waitForCurrentOperation()
-        coordinator.startTokenomics()
         await coordinator.waitForCurrentOperation()
         XCTAssertTrue(launcher.lastProcess?.isRunning == true)
 
@@ -619,11 +699,12 @@ final class CoordinatorSyncTests: XCTestCase {
             launcher: OutputLauncher(output: "[start] scanning local sessions\n")
         )
 
-        coordinator.start()
-        await coordinator.waitForCurrentOperation()
         let probe = expectation(description: "startup probes the configured endpoint")
-        client.onProbe = { probe.fulfill() }
-        coordinator.startTokenomics()
+        client.onProbe = {
+            client.onProbe = nil
+            probe.fulfill()
+        }
+        coordinator.start()
         await fulfillment(of: [probe], timeout: 1)
 
         guard case .starting = coordinator.state else {
@@ -635,38 +716,65 @@ final class CoordinatorSyncTests: XCTestCase {
         coordinator.stop()
     }
 
-    func testChangingPreferredPortRefreshesAndDropsThePreviousSummary() async throws {
+    func testOfflineOwnedProcessIsNotStartedTwice() async throws {
+        let suiteName = "TokenomicsMenubarTests.no-duplicate-launch"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        preferences.launcherPath = "/bin/sh"
+        let client = StartableClient()
+        let launcher = RecordingLauncher(client: client)
+        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+        XCTAssertEqual(coordinator.state, .connected)
+        XCTAssertEqual(launcher.startCount, 1)
+
+        client.started = false
+        coordinator.refresh(triggerSync: false)
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(launcher.startCount, 1)
+        guard case .unavailable(let message) = coordinator.state else {
+            XCTFail("expected unavailable state while the owned process is still running")
+            return
+        }
+        XCTAssertTrue(message.contains("launcher is running"))
+    }
+
+    func testChangingPreferredPortStartsLauncherForTheNewPort() async throws {
         let suite = UserDefaults(suiteName: "TokenomicsMenubarTests.port-switch")!
         suite.removePersistentDomain(forName: "TokenomicsMenubarTests.port-switch")
         let preferences = PreferencesStore(defaults: suite)
         preferences.preferredPort = 8787
         preferences.launcherPath = "/bin/sh"
         let client = PortSwitchClient(availablePorts: [8787])
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
+        let launcher = PortStartingLauncher(client: client)
+        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
 
         coordinator.start()
         await coordinator.waitForCurrentOperation()
         XCTAssertEqual(coordinator.state, .connected)
         XCTAssertNotNil(coordinator.payload)
+        XCTAssertEqual(launcher.startedPorts, [])
 
         preferences.preferredPort = 8788
         await Task.yield()
         await coordinator.waitForCurrentOperation()
 
         XCTAssertTrue(client.probedPorts.contains(8788))
-        XCTAssertNil(coordinator.payload)
-        XCTAssertNil(coordinator.lastGoodPayload)
-        XCTAssertNil(coordinator.endpoint)
+        XCTAssertEqual(launcher.startedPorts, [8788])
+        XCTAssertNotNil(coordinator.payload)
+        XCTAssertNotNil(coordinator.lastGoodPayload)
+        XCTAssertEqual(coordinator.endpoint, Endpoint(port: 8788))
         XCTAssertTrue(coordinator.canStartTokenomics)
-        guard case .unavailable = coordinator.state else {
-            XCTFail("expected unavailable state after switching to an offline port")
-            coordinator.stop()
-            return
-        }
+        XCTAssertEqual(coordinator.state, .connected)
         coordinator.stop()
     }
 
-    func testEndpointDisappearanceDropsCachedSummary() async throws {
+    func testEndpointDisappearanceClearsCacheWhenAutomaticRelaunchFails() async throws {
         let suite = UserDefaults(suiteName: "TokenomicsMenubarTests.endpoint-loss")!
         suite.removePersistentDomain(forName: "TokenomicsMenubarTests.endpoint-loss")
         let preferences = PreferencesStore(defaults: suite)
@@ -690,8 +798,8 @@ final class CoordinatorSyncTests: XCTestCase {
         XCTAssertNil(preferences.activeEndpoint)
         XCTAssertNil(coordinator.lastRefreshAt)
         XCTAssertTrue(coordinator.canStartTokenomics)
-        guard case .unavailable = coordinator.state else {
-            XCTFail("expected unavailable state after the endpoint disappeared")
+        guard case .startFailure = coordinator.state else {
+            XCTFail("expected start failure after automatic relaunch failed")
             coordinator.stop()
             return
         }
@@ -730,6 +838,30 @@ private final class RunningZeroClient: TokenomicsHTTPClient, @unchecked Sendable
 }
 
 @MainActor
+private final class UnexpectedLauncher: TokenomicsLauncher {
+    private(set) var startCount = 0
+
+    func start(executablePath: String, port: Int, timeout: Duration) async throws -> any TokenomicsProcessHandle {
+        startCount += 1
+        throw LauncherError.launchFailed("unexpected launch")
+    }
+}
+
+private final class WrongServiceClient: TokenomicsHTTPClient, @unchecked Sendable {
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        throw EndpointError.notTokenomics
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        throw EndpointError.notTokenomics
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {
+        throw EndpointError.notTokenomics
+    }
+}
+
+@MainActor
 private final class RecordingLauncher: TokenomicsLauncher {
     private let client: StartableClient
     private(set) var startCount = 0
@@ -745,6 +877,22 @@ private final class RecordingLauncher: TokenomicsLauncher {
         let process = RecordingProcess()
         lastProcess = process
         return process
+    }
+}
+
+@MainActor
+private final class PortStartingLauncher: TokenomicsLauncher {
+    private let client: PortSwitchClient
+    private(set) var startedPorts: [Int] = []
+
+    init(client: PortSwitchClient) {
+        self.client = client
+    }
+
+    func start(executablePath: String, port: Int, timeout: Duration) async throws -> any TokenomicsProcessHandle {
+        startedPorts.append(port)
+        client.availablePorts.insert(port)
+        return RecordingProcess()
     }
 }
 

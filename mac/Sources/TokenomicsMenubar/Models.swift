@@ -228,6 +228,81 @@ public struct UsageProfile: Decodable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case id, name, mode }
 }
 
+public struct SubscriptionWindow: Decodable, Equatable, Sendable, Identifiable {
+    public var key: String
+    public var provider: String?
+    public var limitID: String?
+    public var kind: String?
+    public var planType: String?
+    public var windowMinutes: Int
+    public var usedPercent: Double?
+    public var remainingPercent: Double?
+    public var latestAt: Date?
+    public var resetAt: Date?
+    public var apiEquivalentCostUSD: Double?
+    public var projectedFullWindowApiEquivalentUSD: Double?
+
+    public var id: String { key }
+
+    public init(
+        key: String,
+        provider: String? = nil,
+        limitID: String? = nil,
+        kind: String? = nil,
+        planType: String? = nil,
+        windowMinutes: Int,
+        usedPercent: Double? = nil,
+        remainingPercent: Double? = nil,
+        latestAt: Date? = nil,
+        resetAt: Date? = nil,
+        apiEquivalentCostUSD: Double? = nil,
+        projectedFullWindowApiEquivalentUSD: Double? = nil
+    ) {
+        self.key = key
+        self.provider = provider
+        self.limitID = limitID
+        self.kind = kind
+        self.planType = planType
+        self.windowMinutes = windowMinutes
+        self.usedPercent = usedPercent
+        self.remainingPercent = remainingPercent
+        self.latestAt = latestAt
+        self.resetAt = resetAt
+        self.apiEquivalentCostUSD = apiEquivalentCostUSD
+        self.projectedFullWindowApiEquivalentUSD = projectedFullWindowApiEquivalentUSD
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key, provider, kind, planType, windowMinutes, usedPercent, remainingPercent
+        case limitID = "limitId"
+        case latestAt, resetAt
+        case apiEquivalentCostUSD = "apiEquivalentCostUsd"
+        case projectedFullWindowApiEquivalentUSD = "projectedFullWindowApiEquivalentUsd"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        key = try values.decode(String.self, forKey: .key)
+        provider = try values.decodeIfPresent(String.self, forKey: .provider)
+        limitID = try values.decodeIfPresent(String.self, forKey: .limitID)
+        kind = try values.decodeIfPresent(String.self, forKey: .kind)
+        planType = try values.decodeIfPresent(String.self, forKey: .planType)
+        windowMinutes = try values.decode(Int.self, forKey: .windowMinutes)
+        usedPercent = try values.decodeIfPresent(Double.self, forKey: .usedPercent)
+        remainingPercent = try values.decodeIfPresent(Double.self, forKey: .remainingPercent)
+        latestAt = try values.decodeIfPresent(String.self, forKey: .latestAt).flatMap(Self.parseDate)
+        resetAt = try values.decodeIfPresent(String.self, forKey: .resetAt).flatMap(Self.parseDate)
+        apiEquivalentCostUSD = try values.decodeIfPresent(Double.self, forKey: .apiEquivalentCostUSD)
+        projectedFullWindowApiEquivalentUSD = try values.decodeIfPresent(Double.self, forKey: .projectedFullWindowApiEquivalentUSD)
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+}
+
 public struct SummaryResponse: Decodable, Equatable, Sendable {
     public var contractVersion: Int
     public var calendarTimeZone: String?
@@ -236,6 +311,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
     public var generatedAt: Date?
     public var apiEquivalentCostUSD: Double?
     public var billedCostUSD: Double?
+    public var subscriptionWindows: [SubscriptionWindow]
     public var total: UsagePeriod?
     public var currentMonth: UsagePeriod?
     public var daily: [DailySpendPoint]
@@ -310,6 +386,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         generatedAt: Date? = nil,
         apiEquivalentCostUSD: Double? = nil,
         billedCostUSD: Double? = nil,
+        subscriptionWindows: [SubscriptionWindow] = [],
         total: UsagePeriod? = nil,
         currentMonth: UsagePeriod? = nil,
         daily: [DailySpendPoint] = [],
@@ -327,6 +404,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         self.generatedAt = generatedAt
         self.apiEquivalentCostUSD = apiEquivalentCostUSD
         self.billedCostUSD = billedCostUSD
+        self.subscriptionWindows = subscriptionWindows
         self.total = total
         self.currentMonth = currentMonth
         self.daily = daily
@@ -341,7 +419,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case contractVersion
         case generatedAt, calendarTimeZone, usageProfile, costSemantics
-        case apiEquivalentCostUsd, billedCostUsd, total, currentMonth, daily
+        case apiEquivalentCostUsd, billedCostUsd, subscriptionWindows, total, currentMonth, daily
         case budget
         case providerModelEffortDaily
         case configurationRevision, pricingBasis, pricingStale
@@ -363,6 +441,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         costSemantics = try values.decodeIfPresent(String.self, forKey: .costSemantics)
         apiEquivalentCostUSD = try values.decodeIfPresent(Double.self, forKey: .apiEquivalentCostUsd)
         billedCostUSD = try values.decodeIfPresent(Double.self, forKey: .billedCostUsd)
+        subscriptionWindows = try values.decodeIfPresent([SubscriptionWindow].self, forKey: .subscriptionWindows) ?? []
         total = try values.decodeIfPresent(UsagePeriod.self, forKey: .total)
         currentMonth = try values.decodeIfPresent(UsagePeriod.self, forKey: .currentMonth)
         daily = try values.decodeIfPresent([DailySpendPoint].self, forKey: .daily) ?? []
