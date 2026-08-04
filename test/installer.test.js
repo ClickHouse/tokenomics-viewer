@@ -16,6 +16,7 @@ test("one-line installer is offline-testable, repeatable, and preserves data", a
   const home = Path.join(temporary, "home with ' quote");
   const installRoot = Path.join(home, ".local", "share", "tokenomics-viewer");
   const binDir = Path.join(home, ".local", "bin");
+  const launcherConfiguration = Path.join(home, "Library", "Application Support", "Tokenomics Viewer", "tokenomics-launch.json");
   const env = {
     ...process.env,
     HOME: home,
@@ -24,6 +25,7 @@ test("one-line installer is offline-testable, repeatable, and preserves data", a
     TOKENOMICS_BIN_DIR: binDir,
     TOKENOMICS_NODE_BIN: process.execPath,
     TOKENOMICS_NO_LAUNCH: "1",
+    TOKENOMICS_MACOS_LAUNCHER_CONFIG: launcherConfiguration,
   };
 
   await fs.mkdir(Path.join(installRoot, ".install-lock"), { recursive: true });
@@ -33,6 +35,11 @@ test("one-line installer is offline-testable, repeatable, and preserves data", a
   assert.equal((await fs.lstat(Path.join(installRoot, "current"))).isSymbolicLink(), true);
   assert.equal((await fs.stat(Path.join(binDir, "tokenomics"))).mode & 0o111, 0o111);
   assert.equal((await fs.stat(Path.join(binDir, "tokenomics-launch"))).mode & 0o111, 0o111);
+  assert.deepEqual(JSON.parse(await fs.readFile(launcherConfiguration, "utf8")), {
+    schema: 1,
+    command: Path.join(binDir, "tokenomics-launch"),
+    args: [],
+  });
 
   const help = await execFile(Path.join(binDir, "tokenomics-launch"), ["--help"], { env });
   assert.match(help.stdout, /ClickHouse.*default/i);

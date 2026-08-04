@@ -144,6 +144,28 @@ write_wrapper() {
   mv -f "$temporary" "$wrapper"
 }
 
+write_macos_launcher_configuration() {
+  configuration_path=${TOKENOMICS_MACOS_LAUNCHER_CONFIG:-}
+  if [ -z "$configuration_path" ]; then
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    configuration_path="$HOME/Library/Application Support/Tokenomics Viewer/tokenomics-launch.json"
+  fi
+
+  "$NODE_BIN" -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const [configurationPath, command] = process.argv.slice(1);
+    const temporary = `${configurationPath}.${process.pid}.tmp`;
+    fs.mkdirSync(path.dirname(configurationPath), { recursive: true });
+    try {
+      fs.writeFileSync(temporary, `${JSON.stringify({ schema: 1, command, args: [] }, null, 2)}\n`, { mode: 0o600 });
+      fs.renameSync(temporary, configurationPath);
+    } finally {
+      fs.rmSync(temporary, { force: true });
+    }
+  ' "$configuration_path" "$BIN_DIR/tokenomics-launch"
+}
+
 require_command curl
 require_command tar
 require_command sed
@@ -200,6 +222,7 @@ ln -s "$release_dir" "$next_link"
 write_wrapper "$BIN_DIR/tokenomics" app.js
 write_wrapper "$BIN_DIR/tokenomics-viewer" app.js
 write_wrapper "$BIN_DIR/tokenomics-launch" launcher.js
+write_macos_launcher_configuration
 
 say "Tokenomics Viewer installed in $INSTALL_ROOT"
 say "Commands installed in $BIN_DIR"
