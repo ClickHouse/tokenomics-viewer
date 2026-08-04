@@ -1,6 +1,22 @@
 import Foundation
 import Combine
 
+public enum MenuBarLabelMode: String, CaseIterable, Identifiable, Sendable {
+    case today
+    case quotaUsed = "quota-used"
+    case quotaReset = "quota-reset"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .today: return "Today's usage"
+        case .quotaUsed: return "Shortest quota used"
+        case .quotaReset: return "Shortest quota reset"
+        }
+    }
+}
+
 public struct RuntimePreferences: Equatable, Sendable {
     public static let defaultPort = 8787
     public static let defaultAutomaticSyncInterval: TimeInterval = 20
@@ -12,19 +28,22 @@ public struct RuntimePreferences: Equatable, Sendable {
     public var launcherPath: String?
     public var automaticSyncEnabled: Bool
     public var automaticSyncInterval: TimeInterval
+    public var menuBarLabelMode: MenuBarLabelMode
 
     public init(
         preferredPort: Int = RuntimePreferences.defaultPort,
         activeEndpoint: Endpoint? = nil,
         launcherPath: String? = nil,
         automaticSyncEnabled: Bool = true,
-        automaticSyncInterval: TimeInterval = RuntimePreferences.defaultAutomaticSyncInterval
+        automaticSyncInterval: TimeInterval = RuntimePreferences.defaultAutomaticSyncInterval,
+        menuBarLabelMode: MenuBarLabelMode = .today
     ) {
         self.preferredPort = Self.validPort(preferredPort) ? preferredPort : Self.defaultPort
         self.activeEndpoint = activeEndpoint
         self.launcherPath = Self.validAbsolutePath(launcherPath) ? launcherPath : nil
         self.automaticSyncEnabled = automaticSyncEnabled
         self.automaticSyncInterval = Self.validInterval(automaticSyncInterval) ? automaticSyncInterval : Self.defaultAutomaticSyncInterval
+        self.menuBarLabelMode = menuBarLabelMode
     }
 
     public init(defaults: UserDefaults) {
@@ -33,12 +52,14 @@ public struct RuntimePreferences: Equatable, Sendable {
         let launcher = defaults.string(forKey: Keys.launcherPath)
         let enabled = defaults.object(forKey: Keys.automaticSyncEnabled) as? Bool ?? true
         let interval = defaults.object(forKey: Keys.automaticSyncInterval) as? Double ?? Self.defaultAutomaticSyncInterval
+        let labelMode = defaults.string(forKey: Keys.menuBarLabelMode).flatMap(MenuBarLabelMode.init(rawValue:)) ?? .today
         self.init(
             preferredPort: storedPort,
             activeEndpoint: active,
             launcherPath: launcher,
             automaticSyncEnabled: enabled,
-            automaticSyncInterval: interval
+            automaticSyncInterval: interval,
+            menuBarLabelMode: labelMode
         )
     }
 
@@ -56,6 +77,7 @@ public struct RuntimePreferences: Equatable, Sendable {
         }
         defaults.set(automaticSyncEnabled, forKey: Keys.automaticSyncEnabled)
         defaults.set(automaticSyncInterval, forKey: Keys.automaticSyncInterval)
+        defaults.set(menuBarLabelMode.rawValue, forKey: Keys.menuBarLabelMode)
     }
 
     public static func validPort(_ port: Int) -> Bool { (1...65_535).contains(port) }
@@ -83,6 +105,7 @@ public struct RuntimePreferences: Equatable, Sendable {
         static let launcherPath = "tokenomics.launcherPath"
         static let automaticSyncEnabled = "tokenomics.automaticSyncEnabled"
         static let automaticSyncInterval = "tokenomics.automaticSyncInterval"
+        static let menuBarLabelMode = "tokenomics.menuBarLabelMode"
     }
 }
 
@@ -119,6 +142,7 @@ public final class PreferencesStore: ObservableObject {
             persist()
         }
     }
+    @Published public var menuBarLabelMode: MenuBarLabelMode { didSet { persist() } }
 
     public private(set) var activeEndpoint: Endpoint? {
         didSet { persist() }
@@ -134,6 +158,7 @@ public final class PreferencesStore: ObservableObject {
         launcherPath = values.launcherPath ?? ""
         automaticSyncEnabled = values.automaticSyncEnabled
         automaticSyncInterval = values.automaticSyncInterval
+        menuBarLabelMode = values.menuBarLabelMode
         activeEndpoint = values.activeEndpoint
         isLoading = false
     }
@@ -164,7 +189,8 @@ public final class PreferencesStore: ObservableObject {
             activeEndpoint: activeEndpoint,
             launcherPath: launcherPath.isEmpty ? nil : launcherPath,
             automaticSyncEnabled: automaticSyncEnabled,
-            automaticSyncInterval: normalizedInterval()
+            automaticSyncInterval: normalizedInterval(),
+            menuBarLabelMode: menuBarLabelMode
         )
         values.save(to: defaults)
     }

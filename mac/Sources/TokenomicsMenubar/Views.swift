@@ -24,59 +24,158 @@ enum BudgetUsageLevel: Equatable {
     }
 }
 
+enum QuotaPresentation {
+    static func orderedWindows(_ windows: [SubscriptionWindow]) -> [SubscriptionWindow] {
+        windows
+            .filter { $0.windowMinutes > 0 }
+            .sorted { lhs, rhs in
+                lhs.windowMinutes < rhs.windowMinutes
+                    || (lhs.windowMinutes == rhs.windowMinutes && lhs.key < rhs.key)
+            }
+    }
+
+    static func shortestWindow(
+        _ windows: [SubscriptionWindow],
+        requiringReset: Bool = false
+    ) -> SubscriptionWindow? {
+        orderedWindows(windows).first { window in
+            if requiringReset { return window.resetAt != nil }
+            return normalizedPercent(window.usedPercent) != nil
+        }
+    }
+
+    static func windowLabel(minutes: Int) -> String {
+        switch minutes {
+        case 300: return "5-hour"
+        case 10_080: return "Weekly"
+        case let value where value % 1_440 == 0: return "\(value / 1_440)-day"
+        case let value where value % 60 == 0: return "\(value / 60)-hour"
+        default: return "\(minutes)-minute"
+        }
+    }
+
+    static func compactWindowLabel(minutes: Int) -> String {
+        switch minutes {
+        case 10_080: return "1w"
+        case let value where value % 1_440 == 0: return "\(value / 1_440)d"
+        case let value where value % 60 == 0: return "\(value / 60)h"
+        default: return "\(minutes)m"
+        }
+    }
+
+    static func windowTitle(_ window: SubscriptionWindow) -> String {
+        let provider: String?
+        switch window.provider?.lowercased() {
+        case "openai": provider = "OpenAI"
+        case "anthropic": provider = "Anthropic"
+        case let value?: provider = value.localizedCapitalized
+        case nil: provider = nil
+        }
+        return [provider, windowLabel(minutes: window.windowMinutes)]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    static func normalizedPercent(_ value: Double?) -> Double? {
+        guard let value, value.isFinite else { return nil }
+        return min(100, max(0, value))
+    }
+
+    static func percentText(_ value: Double?) -> String? {
+        normalizedPercent(value).map { String(format: "%.0f%%", $0) }
+    }
+
+    static func resetCountdown(resetAt: Date?, now: Date) -> String? {
+        guard let resetAt else { return nil }
+        let seconds = resetAt.timeIntervalSince(now)
+        guard seconds > 0 else { return "Reset pending" }
+        let minutes = max(1, Int(ceil(seconds / 60)))
+        if minutes < 60 { return "Resets in \(minutes)m" }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        if hours < 24 {
+            return remainingMinutes == 0 ? "Resets in \(hours)h" : "Resets in \(hours)h \(remainingMinutes)m"
+        }
+        let days = hours / 24
+        let remainingHours = hours % 24
+        return remainingHours == 0 ? "Resets in \(days)d" : "Resets in \(days)d \(remainingHours)h"
+    }
+}
+
+enum MenuBarPresentation {
+    static func labelText(
+        payload: SummaryResponse,
+        mode: MenuBarLabelMode,
+        now: Date
+    ) -> String? {
+        switch mode {
+        case .today:
+            guard payload.hasAnyUsageValue, let today = payload.currentDay(on: now)?.amountUSD else { return nil }
+            let prefix = payload.costSemantics == "api-equivalent" ? "Today eq." : "Today"
+            let denominator = todayDenominator(payload)
+            if let denominator {
+                return "\(prefix) \(Presentation.compactCurrency(today))/\(Presentation.compactCurrency(denominator))"
+            }
+            return "\(prefix) \(Presentation.compactCurrency(today))"
+        case .quotaUsed:
+            guard let window = QuotaPresentation.shortestWindow(payload.subscriptionWindows),
+                  let used = QuotaPresentation.percentText(window.usedPercent)
+            else { return nil }
+            return "\(QuotaPresentation.compactWindowLabel(minutes: window.windowMinutes)) \(used)"
+        case .quotaReset:
+            guard let window = QuotaPresentation.shortestWindow(payload.subscriptionWindows, requiringReset: true),
+                  let reset = QuotaPresentation.resetCountdown(resetAt: window.resetAt, now: now)
+            else { return nil }
+            return "\(QuotaPresentation.compactWindowLabel(minutes: window.windowMinutes)) \(reset.replacingOccurrences(of: "Resets in ", with: ""))"
+        }
+    }
+
+    private static func todayDenominator(_ payload: SummaryResponse) -> Double? {
+        guard payload.budget.todayScheduled ?? true else { return nil }
+        let profileMode = payload.usageProfile?.mode?.lowercased() ?? ""
+        let budgetStatus = payload.budget.status?.lowercased() ?? ""
+        let noLimit = profileMode.contains("subscription")
+            || profileMode.contains("no-limit")
+            || profileMode.contains("unlimited")
+            || budgetStatus.contains("subscription")
+            || budgetStatus.contains("no-limit")
+            || budgetStatus.contains("unlimited")
+        return noLimit ? nil : payload.budget.todayAllowanceUSD
+    }
+}
+
 public struct MenuBarLabelView: View {
     @ObservedObject var coordinator: ConnectionCoordinator
+    @ObservedObject private var preferences: PreferencesStore
 
     public init(coordinator: ConnectionCoordinator) {
         self.coordinator = coordinator
+        _preferences = ObservedObject(wrappedValue: coordinator.preferences)
     }
 
     public var body: some View {
-        HStack(spacing: 4) {
-            if let text = labelText {
-                if coordinator.state.isUsable == false { Image(systemName: iconName).accessibilityHidden(true) }
-                Text(text)
-            } else {
-                Image(systemName: iconName).accessibilityHidden(true)
-                Text(stateLabel)
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            HStack(spacing: 4) {
+                if let text = labelText(now: context.date) {
+                    if coordinator.state.isUsable == false { Image(systemName: iconName).accessibilityHidden(true) }
+                    Text(text)
+                } else {
+                    Image(systemName: iconName).accessibilityHidden(true)
+                    Text(stateLabel)
+                }
             }
+            .accessibilityLabel(accessibilityText(now: context.date))
+            .help(accessibilityText(now: context.date))
         }
         .font(.system(size: 12, weight: .medium, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(labelColor)
-        .accessibilityLabel(accessibilityText)
-        .help(accessibilityText)
         .task { coordinator.start() }
     }
 
-    private var labelText: String? {
+    private func labelText(now: Date) -> String? {
         guard let payload = coordinator.payload ?? coordinator.lastGoodPayload else { return nil }
-        guard payload.hasAnyUsageValue else { return nil }
-        if let today = payload.today?.amountUSD {
-            return "Today \(Self.amount(today, denominator: todayDenominator(payload)))"
-        }
-        return nil
-    }
-
-    private func todayDenominator(_ payload: SummaryResponse) -> Double? {
-        guard isScheduled(payload) else { return nil }
-        if isNoLimit(payload) { return nil }
-        return payload.budget.todayAllowanceUSD
-    }
-
-    private func isScheduled(_ payload: SummaryResponse) -> Bool {
-        payload.budget.todayScheduled ?? true
-    }
-
-    private func isNoLimit(_ payload: SummaryResponse) -> Bool {
-        let profileMode = payload.usageProfile?.mode?.lowercased() ?? ""
-        let budgetStatus = payload.budget.status?.lowercased() ?? ""
-        return profileMode.contains("subscription") || profileMode.contains("no-limit") || profileMode.contains("unlimited") || budgetStatus.contains("subscription") || budgetStatus.contains("no-limit") || budgetStatus.contains("unlimited")
-    }
-
-    private static func amount(_ value: Double, denominator: Double?) -> String {
-        if let denominator { return "\(Presentation.compactCurrency(value))/\(Presentation.compactCurrency(denominator))" }
-        return Presentation.compactCurrency(value)
+        return MenuBarPresentation.labelText(payload: payload, mode: preferences.menuBarLabelMode, now: now)
     }
 
     private var iconName: String {
@@ -111,9 +210,9 @@ public struct MenuBarLabelView: View {
         }
     }
 
-    private var accessibilityText: String {
+    private func accessibilityText(now: Date) -> String {
         if let payload = coordinator.payload ?? coordinator.lastGoodPayload {
-            let today = payload.today?.amountUSD.map(Presentation.currency) ?? "No data"
+            let today = payload.currentDay(on: now)?.amountUSD.map(Presentation.currency) ?? "No data"
             let month = payload.monthToDate?.amountUSD.map(Presentation.currency) ?? "No data"
             return "Tokenomics. Today \(today). Month to date \(month). State \(stateLabel)."
         }
@@ -138,6 +237,7 @@ public struct PopoverView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             stateBanner
+            quotaSection
             todaySection
             Divider()
             monthSection
@@ -215,10 +315,28 @@ public struct PopoverView: View {
         }
     }
 
+    @ViewBuilder
+    private var quotaSection: some View {
+        let windows = QuotaPresentation.orderedWindows(payload?.subscriptionWindows ?? [])
+        if !windows.isEmpty {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                if windows.count > 4 {
+                    ScrollView {
+                        QuotaCockpitView(windows: windows, now: context.date)
+                    }
+                    .frame(maxHeight: 180)
+                } else {
+                    QuotaCockpitView(windows: windows, now: context.date)
+                }
+            }
+            Divider()
+        }
+    }
+
     private var todaySection: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text("Today").foregroundStyle(.secondary)
+                Text(todayTitle).foregroundStyle(.secondary)
                 Spacer()
                 Text(todayAmount).font(.title3.weight(.semibold))
             }
@@ -240,7 +358,7 @@ public struct PopoverView: View {
     private var monthSection: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text("Month to date").foregroundStyle(.secondary)
+                Text(monthTitle).foregroundStyle(.secondary)
                 Spacer()
                 Text(monthAmount).font(.title3.weight(.semibold))
             }
@@ -320,6 +438,9 @@ public struct PopoverView: View {
     private var monthValue: Double { payload?.monthToDate?.amountUSD ?? 0 }
     private var todayAmount: String { payload?.today?.amountUSD.map(Presentation.currency) ?? "No data yet" }
     private var monthAmount: String { payload?.monthToDate?.amountUSD.map(Presentation.currency) ?? "No data yet" }
+    private var todayTitle: String { isApiEquivalent ? "Today · API equivalent" : "Today" }
+    private var monthTitle: String { isApiEquivalent ? "Month · API equivalent" : "Month to date" }
+    private var isApiEquivalent: Bool { payload?.costSemantics == "api-equivalent" }
     private var todayProviderSpend: [ProviderSpend] { payload?.providerSpendToday(on: Date()) ?? [] }
     private var monthProviderSpend: [ProviderSpend] { payload?.providerSpendMonthToDate(on: Date()) ?? [] }
     private var scheduledToday: Bool { payload?.budget.todayScheduled ?? true }
@@ -414,6 +535,47 @@ public struct PopoverView: View {
         return "No launcher output was captured."
     }
 
+}
+
+private struct QuotaCockpitView: View {
+    let windows: [SubscriptionWindow]
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Quota").font(.subheadline.weight(.medium))
+            ForEach(windows) { window in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(QuotaPresentation.windowTitle(window))
+                            .help(window.key)
+                        Spacer()
+                        Text(QuotaPresentation.percentText(window.usedPercent).map { "\($0) used" } ?? "Usage unavailable")
+                            .monospacedDigit()
+                    }
+                    .font(.caption)
+                    if let used = QuotaPresentation.normalizedPercent(window.usedPercent) {
+                        ProgressView(value: used, total: 100)
+                            .tint(BudgetUsageLevel(amount: used, limit: 100).color)
+                            .accessibilityLabel("\(QuotaPresentation.windowTitle(window)) quota")
+                            .accessibilityValue("\(QuotaPresentation.percentText(used) ?? "Unknown") used")
+                    }
+                    HStack {
+                        if let remaining = QuotaPresentation.percentText(window.remainingPercent) {
+                            Text("\(remaining) remaining")
+                        }
+                        Spacer()
+                        if let reset = QuotaPresentation.resetCountdown(resetAt: window.resetAt, now: now) {
+                            Text(reset)
+                                .help(window.resetAt?.formatted(date: .abbreviated, time: .shortened) ?? reset)
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
 }
 
 private struct ProviderBreakdownView: View {
@@ -624,6 +786,13 @@ public struct SettingsView: View {
                             intervalText = String(Int(preferences.normalizedInterval()))
                         }
                     }
+            }
+            Section("Menu bar") {
+                Picker("Label", selection: $preferences.menuBarLabelMode) {
+                    ForEach(MenuBarLabelMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
             }
             HStack {
                 Spacer()

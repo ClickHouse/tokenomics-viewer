@@ -1,0 +1,406 @@
+{
+  "contractVersion": 1,
+  "generatedAt": "2026-08-03T12:00:00.000Z",
+  "calendarTimeZone": "UTC",
+  "usageProfile": {
+    "id": "pro",
+    "name": "ChatGPT Pro",
+    "mode": "subscription"
+  },
+  "costSemantics": "api-equivalent",
+  "apiEquivalentCostUsd": 18.42,
+  "billedCostUsd": null,
+  "subscriptionWindows": [
+    {
+      "key": "codex/codex:primary_300m",
+      "provider": "openai",
+      "limitId": "codex",
+      "kind": "primary",
+      "planType": "pro",
+      "windowMinutes": 300,
+      "usedPercent": 68,
+      "remainingPercent": 32,
+      "latestAt": "2026-08-03T12:00:00.000Z",
+      "resetAt": "2026-08-03T13:24:00.000Z",
+      "observedFrom": "2026-08-03T11:45:00.000Z",
+      "apiEquivalentCostUsd": 18.42,
+      "apiEquivalentPerQuotaPointUsd": null,
+      "projectedFullWindowApiEquivalentUsd": null,
+      "requests": 8,
+      "pricedRequests": 8,
+      "pricingCoverage": 1,
+      "timeCoverage": 0.06944444444444445,
+      "localTokens": {
+        "input": 1000,
+        "cacheCreate": 0,
+        "cacheRead": 2000,
+        "output": 300,
+        "total": 3300
+      },
+      "models": [
+        {
+          "name": "openai/gpt-5.6-sol",
+          "provider": "openai",
+          "model": "gpt-5.6-sol",
+          "requests": 8,
+          "pricedRequests": 8,
+          "costUsd": 18.42
+        }
+      ]
+    },
+    {
+      "key": "codex/codex:secondary_10080m",
+      "provider": "openai",
+      "limitId": "codex",
+      "kind": "secondary",
+      "planType": "pro",
+      "windowMinutes": 10080,
+      "usedPercent": 41,
+      "remainingPercent": 59,
+      "latestAt": "2026-08-03T12:00:00.000Z",
+      "resetAt": "2026-08-10T12:00:00.000Z",
+      "observedFrom": "2026-08-03T12:00:00.000Z",
+      "apiEquivalentCostUsd": 0,
+      "apiEquivalentPerQuotaPointUsd": null,
+      "projectedFullWindowApiEquivalentUsd": null,
+      "requests": 0,
+      "pricedRequests": 0,
+      "pricingCoverage": null,
+      "timeCoverage": 0,
+      "localTokens": {
+        "input": 0,
+        "cacheCreate": 0,
+        "cacheRead": 0,
+        "output": 0,
+        "total": 0
+      },
+      "models": []
+    }
+  ],
+  "subscriptionPlans": [
+    {
+      "provider": "openai",
+      "providerLabel": "OpenAI",
+      "currentPlanId": "chatgpt-pro-200",
+      "currentPlanLabel": "ChatGPT Pro ($200)",
+      "currentMonthlyUsd": 200,
+      "capacityMultiple": 20,
+      "lastObservedPlanId": "chatgpt-pro-200",
+      "lastObservedPlanLabel": "ChatGPT Pro ($200)",
+      "source": "protocol",
+      "likelyPlanId": null,
+      "likelyPlanLabel": null,
+      "confidence": "medium",
+      "observedAt": "2026-08-03T12:00:00.000Z",
+      "observedPlanType": "pro",
+      "observedPlanTypes": [
+        "pro"
+      ],
+      "stale": false,
+      "conflict": false,
+      "evidence": [
+        {
+          "kind": "provider-plan-type",
+          "observedAt": "2026-08-03T12:00:00.000Z",
+          "planTypes": [
+            "pro"
+          ],
+          "samples": 16,
+          "limitIds": [
+            "codex"
+          ],
+          "windowMinutes": [
+            300,
+            10080
+          ]
+        }
+      ],
+      "history": [
+        {
+          "date": "2026-08-03",
+          "limitId": "codex",
+          "samples": 8,
+          "signals": [
+            {
+              "planType": "pro",
+              "planId": "chatgpt-pro-200",
+              "planLabel": "ChatGPT Pro ($200)",
+              "samples": 8,
+              "firstObservedAt": null,
+              "lastObservedAt": null,
+              "supported": true,
+              "share": 1
+            }
+          ],
+          "mixed": false
+        }
+      ],
+      "inference": null,
+      "caveat": "Codex plan_type is direct telemetry, but concurrent sessions can overlap around a plan change. Mixed days remain mixed instead of being forced into one tier."
+    },
+    {
+      "provider": "anthropic",
+      "providerLabel": "Anthropic",
+      "currentPlanId": null,
+      "currentPlanLabel": null,
+      "currentMonthlyUsd": null,
+      "capacityMultiple": null,
+      "lastObservedPlanId": null,
+      "lastObservedPlanLabel": null,
+      "source": "none",
+      "likelyPlanId": null,
+      "likelyPlanLabel": null,
+      "confidence": "none",
+      "observedAt": null,
+      "observedPlanType": null,
+      "observedPlanTypes": [],
+      "stale": false,
+      "conflict": false,
+      "evidence": [],
+      "history": [],
+      "inference": null,
+      "caveat": "Claude session telemetry records usage but does not expose subscription plan, account identity, or quota percentages. Heuristic floors aggregate local Claude activity; inactivity cannot identify a downgrade."
+    }
+  ],
+  "sources": {
+    "files": 0,
+    "zipFiles": 0,
+    "zipEntries": 0,
+    "parseErrors": 0,
+    "skippedFiles": 0,
+    "tokenCountSnapshots": 0,
+    "skippedTokenCountSnapshots": 0
+  },
+  "total": {
+    "requests": 8,
+    "input": 0,
+    "cacheCreate5m": 0,
+    "cacheCreate30m": 0,
+    "cacheCreate1h": 0,
+    "cacheRead": 0,
+    "output": 0,
+    "reasoningOutput": 0,
+    "costUsd": 18.42,
+    "reasoningCostUsd": 0,
+    "costsUsd": {
+      "input": 0,
+      "cacheCreate5m": 0,
+      "cacheCreate30m": 0,
+      "cacheCreate1h": 0,
+      "cacheRead": 0,
+      "output": 0
+    },
+    "pricedRequests": 8,
+    "unpricedRequests": 0,
+    "pricedInput": 0,
+    "pricedCacheCreate5m": 0,
+    "pricedCacheCreate30m": 0,
+    "pricedCacheCreate1h": 0,
+    "pricedCacheRead": 0,
+    "pricedOutput": 0,
+    "pricedReasoningOutput": 0,
+    "visibleInputChars": 0,
+    "visibleOutputChars": 0,
+    "visibleTotalChars": 0,
+    "visibleCharTokenSamples": 0,
+    "visibleCharsPerTokenSum": 0,
+    "visibleCharsPerTokenMin": null,
+    "visibleCharsPerTokenMax": null,
+    "visibleOutputTextChars": 0,
+    "visibleOutputTextTokens": 0,
+    "outputCharTokenSamples": 0,
+    "outputCharsPerTokenSum": 0,
+    "outputCharsPerTokenMin": null,
+    "outputCharsPerTokenMax": null,
+    "outputCharsPerTokenP10": null,
+    "outputCharsPerTokenP99": null,
+    "outputCharTokenOutliers": 0
+  },
+  "currentMonth": {
+    "name": "2026-08",
+    "through": "2026-08-03",
+    "startAt": "2026-08-01T00:00:00.000Z",
+    "endAt": "2026-08-04T00:00:00.000Z",
+    "costUsd": 18.42,
+    "costsUsd": {
+      "input": 0,
+      "cacheCreate5m": 0,
+      "cacheCreate30m": 0,
+      "cacheCreate1h": 0,
+      "cacheRead": 0,
+      "output": 0
+    },
+    "pricedInput": 0,
+    "pricedCacheCreate5m": 0,
+    "pricedCacheCreate30m": 0,
+    "pricedCacheCreate1h": 0,
+    "pricedCacheRead": 0,
+    "pricedOutput": 0,
+    "pricedReasoningOutput": 0,
+    "visibleInputChars": 0,
+    "visibleOutputChars": 0,
+    "visibleTotalChars": 0,
+    "visibleCharTokenSamples": 0,
+    "visibleCharsPerTokenSum": 0,
+    "visibleCharsPerTokenMin": null,
+    "visibleCharsPerTokenMax": null,
+    "visibleOutputTextChars": 0,
+    "visibleOutputTextTokens": 0,
+    "outputCharTokenSamples": 0,
+    "outputCharsPerTokenSum": 0,
+    "outputCharsPerTokenMin": null,
+    "outputCharsPerTokenMax": null,
+    "outputCharsPerTokenP10": null,
+    "outputCharsPerTokenP99": null,
+    "outputCharTokenOutliers": 0,
+    "limitUsd": null,
+    "remainingUsd": null,
+    "overageUsd": null,
+    "usedRatio": null
+  },
+  "budget": {
+    "todayScheduled": true,
+    "totalScheduledDays": 21,
+    "remainingScheduledDays": 21,
+    "limitUsd": null,
+    "spentUsd": 18.42,
+    "remainingUsd": null,
+    "overageUsd": null,
+    "usedRatio": null,
+    "baselineDailyTargetUsd": null,
+    "todayAllowanceUsd": null,
+    "todayRemainingUsd": null,
+    "allowanceBasis": "no_monthly_limit",
+    "status": "subscription"
+  },
+  "topModels": [],
+  "models": [],
+  "topProjects": [],
+  "topEfforts": [],
+  "serviceTiers": [],
+  "serviceModes": [],
+  "agents": [],
+  "observedHarnesses": [],
+  "daily": [
+    {
+      "name": "2026-08-03",
+      "costUsd": 18.42,
+      "costsUsd": {
+        "input": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate30m": 0,
+        "cacheCreate1h": 0,
+        "cacheRead": 0,
+        "output": 0
+      },
+      "pricedInput": 0,
+      "pricedCacheCreate5m": 0,
+      "pricedCacheCreate30m": 0,
+      "pricedCacheCreate1h": 0,
+      "pricedCacheRead": 0,
+      "pricedOutput": 0,
+      "pricedReasoningOutput": 0,
+      "visibleInputChars": 0,
+      "visibleOutputChars": 0,
+      "visibleTotalChars": 0,
+      "visibleCharTokenSamples": 0,
+      "visibleCharsPerTokenSum": 0,
+      "visibleCharsPerTokenMin": null,
+      "visibleCharsPerTokenMax": null,
+      "visibleOutputTextChars": 0,
+      "visibleOutputTextTokens": 0,
+      "outputCharTokenSamples": 0,
+      "outputCharsPerTokenSum": 0,
+      "outputCharsPerTokenMin": null,
+      "outputCharsPerTokenMax": null,
+      "outputCharsPerTokenP10": null,
+      "outputCharsPerTokenP99": null,
+      "outputCharTokenOutliers": 0
+    }
+  ],
+  "weekly": [],
+  "monthly": [
+    {
+      "name": "2026-08",
+      "costUsd": 18.42,
+      "costsUsd": {
+        "input": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate30m": 0,
+        "cacheCreate1h": 0,
+        "cacheRead": 0,
+        "output": 0
+      },
+      "pricedInput": 0,
+      "pricedCacheCreate5m": 0,
+      "pricedCacheCreate30m": 0,
+      "pricedCacheCreate1h": 0,
+      "pricedCacheRead": 0,
+      "pricedOutput": 0,
+      "pricedReasoningOutput": 0,
+      "visibleInputChars": 0,
+      "visibleOutputChars": 0,
+      "visibleTotalChars": 0,
+      "visibleCharTokenSamples": 0,
+      "visibleCharsPerTokenSum": 0,
+      "visibleCharsPerTokenMin": null,
+      "visibleCharsPerTokenMax": null,
+      "visibleOutputTextChars": 0,
+      "visibleOutputTextTokens": 0,
+      "outputCharTokenSamples": 0,
+      "outputCharsPerTokenSum": 0,
+      "outputCharsPerTokenMin": null,
+      "outputCharsPerTokenMax": null,
+      "outputCharsPerTokenP10": null,
+      "outputCharsPerTokenP99": null,
+      "outputCharTokenOutliers": 0
+    }
+  ],
+  "projectDaily": [],
+  "configurationRevision": null,
+  "pricingBasis": "standard",
+  "regionalMultiplier": 1,
+  "pricingStale": false,
+  "providerModelEffortDaily": [],
+  "rateLimits": {
+    "windows": {
+      "codex/codex:primary_300m": {
+        "agent": "codex",
+        "limitId": "codex",
+        "kind": "primary",
+        "windowMinutes": 300,
+        "planType": "pro",
+        "samples": 8,
+        "latestUsedPercent": 68,
+        "latestRemainingPercent": 32,
+        "latestAt": "2026-08-03T12:00:00.000Z",
+        "latestResetAt": 1785763440
+      },
+      "codex/codex:secondary_10080m": {
+        "agent": "codex",
+        "limitId": "codex",
+        "kind": "secondary",
+        "windowMinutes": 10080,
+        "planType": "pro",
+        "samples": 8,
+        "latestUsedPercent": 41,
+        "latestRemainingPercent": 59,
+        "latestAt": "2026-08-03T12:00:00.000Z",
+        "latestResetAt": 1786363200
+      }
+    },
+    "daily": {},
+    "weekly": {},
+    "planHistory": [
+      {
+        "date": "2026-08-03",
+        "agent": "codex",
+        "limitId": "codex",
+        "planType": "pro",
+        "samples": 8
+      }
+    ]
+  },
+  "unpricedModels": [],
+  "recommendations": []
+}
