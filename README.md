@@ -1,8 +1,9 @@
 # Tokenomics Viewer
 
 Local-first cost and token analytics for Codex, Claude Code, omp (oh-my-pi),
-Pi, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, and Grok Build, powered by
-ClickHouse. Tokenomics reads local session logs, removes replayed parent traces
+Pi, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, Grok Build, and GitHub
+Copilot CLI/VS Code, powered by ClickHouse. Tokenomics reads local session logs,
+removes replayed parent traces
 from forked Codex sessions, normalizes exact usage where the source proves its
 semantics, and estimates costs from an editable pricing catalog.
 
@@ -31,7 +32,7 @@ The installer does not use `sudo` or install npm packages. On the first run it:
 3. Installs a private Node.js 26 runtime when the system Node.js is too old.
 4. Installs `clickhousectl`, selects stable ClickHouse, and starts the named
    `tokenomics` server.
-5. Imports supported exact-usage sessions and observed-only Cursor/Grok
+5. Imports supported exact-usage sessions and observed-only Cursor/Grok/Copilot
    metadata into ClickHouse.
 6. Starts the dashboard on a loopback address and opens it in your browser.
 
@@ -71,8 +72,9 @@ command to use. It does not edit shell startup files.
 - Codex fast-mode credit-equivalent pricing when a session records its service
   tier.
 - Codex rate-limit consumption summaries when snapshots are present.
-- Observed Harness Coverage for Cursor Agent and Grok Build session metadata.
-  These sessions are explicitly `observed-only`: usage is unavailable and they
+- Observed Harness Coverage for Cursor Agent, Grok Build, and GitHub Copilot
+  CLI/VS Code session metadata. These sessions are explicitly `observed-only`:
+  usage is unavailable and they
   never change exact token, request, cost, agent, or service-mode totals.
 
 Cost estimates are analytical aids, not billing statements. Subscription usage,
@@ -104,11 +106,12 @@ tokenomics-launch -- --source gemini
 tokenomics-launch -- --source opencode
 tokenomics-launch -- --source cursor
 tokenomics-launch -- --source grok
+tokenomics-launch -- --source copilot
 ```
 
 The default `--source all` scans exact Claude Code, Codex, omp, Pi, Gemini,
-Qwen, and OpenCode sources together, plus observed-only Cursor Agent and Grok
-Build metadata.
+Qwen, and OpenCode sources together, plus observed-only Cursor Agent, Grok
+Build, and GitHub Copilot CLI/VS Code metadata.
 
 Serve the current ClickHouse database without scanning source files:
 
@@ -240,22 +243,34 @@ With no explicit paths, Tokenomics discovers:
   observed-only)
 - `~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl` (Grok Build,
   observed-only; reads sibling `summary.json` and optional `signals.json`)
+- `~/.copilot/session-state/<session-id>/events.jsonl` (GitHub Copilot CLI,
+  observed-only)
+- `~/Library/Application Support/Code/User/workspaceStorage/*/chatSessions/*.jsonl`
+  on macOS, with the equivalent `~/.config/Code/...` and
+  `~/AppData/Roaming/Code/...` roots on Linux and Windows (GitHub Copilot in
+  VS Code, observed-only)
 
 Use `--source claude`, `--source codex`, `--source omp`, `--source pi`,
 `--source gemini`, `--source qwen`, `--source opencode`, `--source cursor`,
-`--source grok`, `--archives`, or `--no-archives` to control default discovery.
+`--source grok`, `--source copilot`, `--archives`, or `--no-archives` to control
+default discovery.
 ZIP and Zstandard-compressed rollouts are read
 directly without extracting them. If both `.jsonl` and `.jsonl.zst` versions
 exist during a compression transition, the plain file is read once.
 
-Cursor and Grok Build records are metadata coverage, not token telemetry. The
+Cursor, Grok Build, and Copilot records are metadata coverage, not exact token
+telemetry. The
 ingester does not parse Cursor conversation content or Grok `updates.jsonl`
 events, and never turns file size, mtime, context snapshots, or running totals
 into usage or cost estimates. Cursor records use the transcript file mtime as
 explicit `fileModifiedAt` provenance and leave the model unknown unless a
 future source proves a session-level model. Grok records retain the model and
 project from `summary.json`, plus `contextTokensUsed` and
-`contextWindowTokens` snapshots from `signals.json` when present.
+`contextWindowTokens` snapshots from `signals.json` when present. Copilot CLI
+records retain completed turns, reported output tokens, premium requests, and
+AIU checkpoints. VS Code journals are replayed to final request metadata while
+conversation and tool-response payloads are discarded; their reported prompt,
+completion, credit, and tool-round counters remain observational only.
 
 Sync is incremental by source fingerprint. Unchanged sessions are skipped;
 changed files or archive entries replace their previous normalized data. Codex
@@ -290,17 +305,24 @@ honors its config-directory environment variables and includes nested Claude
 Desktop/Cowork project sessions. Missing or malformed explicit mode metadata
 always remains `unknown`.
 
-### Observed-only Cursor Agent and Grok Build
+### Observed-only Cursor Agent, Grok Build, and GitHub Copilot
 
-Cursor Agent and Grok Build are metadata-coverage adapters, not exact usage
-adapters. Cursor discovery uses `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`
+Cursor Agent, Grok Build, and GitHub Copilot are metadata-coverage adapters, not
+exact usage adapters. Cursor discovery uses
+`~/.cursor/projects/*/agent-transcripts/**/*.jsonl`
 and records only the project path plus transcript file mtime (`fileModifiedAt`);
 conversation lines are not parsed and the model remains unknown. Grok Build
 discovery uses `~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl` and
 reads only sibling `summary.json` plus optional `signals.json` metadata. It
 retains summary model/project/timestamp fields and context-token snapshots when
-present. Neither adapter calls usage aggregation, creates service-mode rows,
-or contributes to exact token/cost totals. The dashboard labels this surface
+present. Copilot CLI discovery uses
+`~/.copilot/session-state/<session-id>/events.jsonl`; it retains the session
+model/project/timestamp, completed turns, assistant-reported output tokens, and
+the final `session.usage_checkpoint`. VS Code discovery filters
+`workspaceStorage/*/chatSessions/*.jsonl` to GitHub Copilot snapshots, replays
+the journal to its final request metadata, and ignores response-array content.
+None of these adapters calls usage aggregation, creates service-mode rows, or
+contributes to exact token/cost totals. The dashboard labels this surface
 “Observed Harness Coverage” and states that usage is unavailable.
 
 ### omp (oh-my-pi)

@@ -44,10 +44,12 @@ dashboard breakdowns
   harness/agent identity.
 - Exact token counters may be normalized when their cache semantics are known
   and covered by a fixture.
-- Cursor Agent transcripts and Grok Build sessions are admitted as
+- Cursor Agent transcripts, Grok Build sessions, and GitHub Copilot CLI/VS Code
+  sessions are admitted as
   `observed-only` metadata coverage. They retain agent/provider/model/project
   identity and source-timestamp provenance; Grok may retain context-token
-  snapshots from `signals.json`.
+  snapshots from `signals.json`. Copilot may retain harness-native output,
+  request, credit, and checkpoint counters as explicitly non-exact metadata.
 
 ## Rejected Surface
 
@@ -58,13 +60,15 @@ dashboard breakdowns
   record its own tier.
 - Reporting character estimates, divided session totals, inferred costs, or
   embedded provider costs as exact request telemetry.
-- Treating Cursor file mtime, transcript content, Grok context snapshots, or
-  running update totals as exact usage or cost telemetry.
+- Treating Cursor file mtime, transcript content, Grok context snapshots,
+  Copilot VS Code request counters, or Copilot CLI output/checkpoint counters as
+  exact usage or cost telemetry.
 - Claiming parity with every upstream CodeBurn provider from a registry count.
 
 ## Guard-Only Future
 
-- Any future estimate or provider-reported cost for Cursor Agent, Kiro, or Grok
+- Any future estimate or provider-reported cost for Cursor Agent, Kiro, Grok,
+  or GitHub Copilot
   requires a separate measurement contract before it can join exact usage
   totals; observed-only metadata remains excluded from those totals.
 - Network and RPC sources require separate authority, privacy, retry, and
