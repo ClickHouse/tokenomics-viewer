@@ -1,5 +1,6 @@
 import AppKit
 import Charts
+import Combine
 import SwiftUI
 
 enum BudgetUsageLevel: Equatable {
@@ -750,13 +751,19 @@ private struct DailyUsageChart: View {
 
 public struct SettingsView: View {
     @ObservedObject var preferences: PreferencesStore
+    @ObservedObject private var loginItemController: LoginItemController
     private let onApply: () -> Void
     @State private var portText: String
     @State private var launcherPathText: String
     @State private var intervalText: String
 
-    public init(preferences: PreferencesStore, onApply: @escaping () -> Void = {}) {
+    public init(
+        preferences: PreferencesStore,
+        loginItemController: LoginItemController,
+        onApply: @escaping () -> Void = {}
+    ) {
         self.preferences = preferences
+        _loginItemController = ObservedObject(wrappedValue: loginItemController)
         self.onApply = onApply
         _portText = State(initialValue: String(preferences.preferredPort))
         _launcherPathText = State(initialValue: preferences.launcherPath)
@@ -795,6 +802,38 @@ public struct SettingsView: View {
                     }
                 }
             }
+            Section("Startup") {
+                Toggle(
+                    "Launch Tokenomics at login",
+                    isOn: Binding(
+                        get: { loginItemController.isEnabled },
+                        set: { loginItemController.setEnabled($0) }
+                    )
+                )
+                .disabled(!loginItemController.canChangeRegistration)
+
+                switch loginItemController.status {
+                case .requiresApproval:
+                    Text("macOS requires approval before Tokenomics can launch at login.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Open Login Items…") {
+                        loginItemController.openSystemSettings()
+                    }
+                case .unavailable:
+                    Text("Build and open Tokenomics.app to configure launch at login.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .notRegistered, .enabled:
+                    EmptyView()
+                }
+
+                if let error = loginItemController.lastErrorMessage {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
             HStack {
                 Spacer()
                 Button("Apply") {
@@ -811,6 +850,10 @@ public struct SettingsView: View {
         .formStyle(.grouped)
         .padding(12)
         .frame(width: 460)
+        .onAppear { loginItemController.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginItemController.refresh()
+        }
     }
 
     private func chooseLauncher() {

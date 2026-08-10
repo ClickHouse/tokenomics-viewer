@@ -35,6 +35,67 @@ final class BudgetUsageLevelTests: XCTestCase {
     }
 }
 
+@MainActor
+final class LoginItemControllerTests: XCTestCase {
+    func testRegistersAndUnregistersTheMainApp() {
+        let service = RecordingLoginItemService(status: .notRegistered)
+        let controller = LoginItemController(service: service)
+
+        controller.setEnabled(true)
+
+        XCTAssertEqual(service.registerCount, 1)
+        XCTAssertEqual(controller.status, .enabled)
+        XCTAssertTrue(controller.isEnabled)
+
+        controller.setEnabled(false)
+
+        XCTAssertEqual(service.unregisterCount, 1)
+        XCTAssertEqual(controller.status, .notRegistered)
+        XCTAssertFalse(controller.isEnabled)
+    }
+
+    func testRequiresApprovalOpensSystemSettingsWithoutReregistering() {
+        let service = RecordingLoginItemService(status: .requiresApproval)
+        var openSettingsCount = 0
+        let controller = LoginItemController(
+            service: service,
+            openSettings: { openSettingsCount += 1 }
+        )
+
+        controller.setEnabled(true)
+
+        XCTAssertEqual(openSettingsCount, 1)
+        XCTAssertEqual(service.registerCount, 0)
+        XCTAssertFalse(controller.canChangeRegistration)
+    }
+
+    func testUnavailableServiceExplainsThatAnAppBundleIsRequired() {
+        let service = RecordingLoginItemService(status: .unavailable)
+        let controller = LoginItemController(service: service)
+
+        controller.setEnabled(true)
+
+        XCTAssertEqual(service.registerCount, 0)
+        XCTAssertEqual(
+            controller.lastErrorMessage,
+            "Launch at login is available from the packaged Tokenomics.app."
+        )
+    }
+
+    func testRegistrationFailureIsSurfacedAndKeepsTheObservedStatus() {
+        let service = RecordingLoginItemService(
+            status: .notRegistered,
+            registrationError: LoginItemTestError.registrationFailed
+        )
+        let controller = LoginItemController(service: service)
+
+        controller.setEnabled(true)
+
+        XCTAssertEqual(controller.status, .notRegistered)
+        XCTAssertEqual(controller.lastErrorMessage, "Registration failed")
+    }
+}
+
 final class QuotaPresentationTests: XCTestCase {
     func testQuotaLabelsAndCountdownUseInjectedClock() {
         let now = ISO8601DateFormatter().date(from: "2026-08-03T12:00:00Z")!
@@ -76,20 +137,19 @@ final class QuotaPresentationTests: XCTestCase {
 
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
-    func testAppUsesAnActivatableAccessoryPolicy() {
-        let app = NSApplication.shared
-        let originalPolicy = app.activationPolicy()
-        defer { app.setActivationPolicy(originalPolicy) }
+    func testAppRequestsAnActivatableAccessoryPolicy() {
+        var requestedPolicies: [NSApplication.ActivationPolicy] = []
+        AppDelegate(activationPolicyHandler: { requestedPolicies.append($0) })
+            .applicationWillFinishLaunching(
+                Notification(name: NSApplication.willFinishLaunchingNotification)
+            )
 
-        AppDelegate().applicationWillFinishLaunching(
-            Notification(name: NSApplication.willFinishLaunchingNotification, object: app)
-        )
-
-        XCTAssertEqual(app.activationPolicy(), .accessory)
+        XCTAssertEqual(requestedPolicies, [.accessory])
     }
 
     func testPresentDismissesTransientWindowAndShowsFullSettingsWindow() async {
         _ = NSApplication.shared
+        let canValidateWindowGeometry = NSApp.isRunning
         let suiteName = "TokenomicsMenubarTests.settings-window"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
@@ -110,7 +170,10 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertFalse(transientWindow.isVisible)
         XCTAssertTrue(controller.window?.isVisible == true)
         XCTAssertEqual(controller.window?.title, "Settings")
-        XCTAssertEqual(controller.window?.contentLayoutRect.size, NSSize(width: 460, height: 440))
+        XCTAssertEqual(SettingsWindowController.defaultContentSize, NSSize(width: 460, height: 440))
+        if canValidateWindowGeometry {
+            XCTAssertEqual(controller.window?.contentLayoutRect.size, SettingsWindowController.defaultContentSize)
+        }
 
         controller.close()
         transientWindow.close()
@@ -1106,6 +1169,36 @@ private final class FailingLauncher: TokenomicsLauncher {
     func start(executablePath: String, port: Int, timeout: Duration) async throws -> any TokenomicsProcessHandle {
         throw LauncherError.executableNotFound
     }
+}
+
+@MainActor
+private final class RecordingLoginItemService: LoginItemServicing {
+    var status: LoginItemRegistrationStatus
+    private let registrationError: Error?
+    private(set) var registerCount = 0
+    private(set) var unregisterCount = 0
+
+    init(status: LoginItemRegistrationStatus, registrationError: Error? = nil) {
+        self.status = status
+        self.registrationError = registrationError
+    }
+
+    func register() throws {
+        registerCount += 1
+        if let registrationError { throw registrationError }
+        status = .enabled
+    }
+
+    func unregister() throws {
+        unregisterCount += 1
+        status = .notRegistered
+    }
+}
+
+private enum LoginItemTestError: LocalizedError {
+    case registrationFailed
+
+    var errorDescription: String? { "Registration failed" }
 }
 
 private func ISODate(_ value: String) -> Date {

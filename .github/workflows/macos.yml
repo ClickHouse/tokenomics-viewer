@@ -42,9 +42,5 @@ jobs:
           node scripts/generate-macos-summary-fixture.js
           git diff --exit-code -- mac/Tests/TokenomicsMenubarTests/Fixtures
           node --test test/macos-contract.test.js
-      - name: Run tests
-        run: swift test -Xswiftc -warnings-as-errors
-        working-directory: mac
-      - name: Build release executable
-        run: swift build -c release -Xswiftc -warnings-as-errors
-        working-directory: mac
+      - name: Test and build app bundle
+        run: ./mac/build-app.sh
