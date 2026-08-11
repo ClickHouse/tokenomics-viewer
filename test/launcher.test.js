@@ -11,6 +11,7 @@ const {
   ensureClickHouse,
   findExecutable,
   launcherAppArgs,
+  launcherDataDirectory,
   launcherDataPath,
   parseLauncherArgs,
   runLauncher,
@@ -154,6 +155,32 @@ test("ClickHouse setup retries an existing named server without redefining ports
   assert.deepEqual(calls.at(-1), ["wait"]);
 });
 
+test("ClickHouse setup uses a stable writable project directory", async (t) => {
+  const temporary = await fs.mkdtemp(Path.join(Os.tmpdir(), "tokenomics-clickhouse-project-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const projectDirectory = Path.join(temporary, "data", "tokenomics-viewer");
+  const calls = [];
+  let startCalls = 0;
+
+  await ensureClickHouse({
+    healthCheck: async () => false,
+    findChctl: async () => "/bin/chctl",
+    installChctl: async () => { throw new Error("must not install"); },
+    projectDirectory,
+    runCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (args.includes("--http-port") && ++startCalls === 1) {
+        throw new Error("server already exists");
+      }
+    },
+    waitForHealth: async () => {},
+  });
+
+  assert.equal((await fs.stat(projectDirectory)).isDirectory(), true);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(({ options }) => options.cwd === projectDirectory));
+});
+
 test("launcher app arguments enforce sync and selected engine after user arguments", () => {
   assert.deepEqual(launcherAppArgs({
     engine: "clickhouse",
@@ -165,7 +192,11 @@ test("launcher app arguments enforce sync and selected engine after user argumen
   ]);
 });
 
-test("launcher stores SQLite data outside the application release", () => {
+test("launcher stores backend data outside the application release", () => {
+  assert.equal(
+    launcherDataDirectory({ TOKENOMICS_DATA_HOME: "/var/tokenomics-data" }, "/home/user"),
+    Path.join("/var/tokenomics-data", "tokenomics-viewer"),
+  );
   assert.equal(
     launcherDataPath({ TOKENOMICS_DATA_HOME: "/var/tokenomics-data" }, "/home/user"),
     Path.join("/var/tokenomics-data", "tokenomics-viewer", "tokenomics.sqlite"),
