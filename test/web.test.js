@@ -140,6 +140,77 @@ test("web server reuses preloaded report without rebuilding the database", async
   }
 });
 
+test("webserver mode listens before its automatic sync completes", async () => {
+  let syncCalls = 0;
+  let reportBuilds = 0;
+  let releaseSync;
+  const syncGate = new Promise((resolve) => { releaseSync = resolve; });
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => {
+      reportBuilds += 1;
+      return { ...newReport(), marker: "database" };
+    },
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-startup-sync.sqlite"),
+    syncDatabase: async () => {
+      syncCalls += 1;
+      await syncGate;
+      return { ...newReport(), marker: "current" };
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    webserver: true,
+    webserverSync: true,
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const status = await fetch(`${base}/api/sync`).then((response) => response.json());
+    const summaryResponse = await fetch(`${base}/api/summary`);
+    const summary = await summaryResponse.json();
+    assert.equal(syncCalls, 1);
+    assert.equal(status.sync.state, "running");
+    assert.equal(summaryResponse.status, 200);
+    assert.equal(summary.contractVersion, 1);
+    assert.equal(reportBuilds, 0);
+
+    releaseSync();
+    await server.syncController.waitForIdle();
+    assert.equal((await fetch(`${base}/api/sync`).then((response) => response.json())).sync.state, "succeeded");
+    assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "current");
+  } finally {
+    releaseSync();
+    await server.syncController.waitForIdle();
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("webserver mode respects disabled automatic sync", async () => {
+  let syncCalls = 0;
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => newReport(),
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-no-startup-sync.sqlite"),
+    syncDatabase: async () => {
+      syncCalls += 1;
+      return newReport();
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    webserver: true,
+    webserverSync: false,
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const status = await fetch(`${base}/api/sync`).then((response) => response.json());
+    assert.equal(syncCalls, 0);
+    assert.equal(status.sync.state, "idle");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("web server returns 404 for unknown routes and 405 for non-GET requests", async () => {
   const server = await startWebServer(defaultOptions({
     preloadedReport: newReport(),

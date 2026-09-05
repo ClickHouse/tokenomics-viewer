@@ -65,11 +65,7 @@ async function main(argv = process.argv.slice(2)) {
     return options;
   }
   if (options.webserver) {
-    let preloadedReport = null;
-    if (options.webserverSync) {
-      preloadedReport = await storage.syncDatabase(options);
-    }
-    const server = await web.startWebServer({ ...options, preloadedReport });
+    const server = await web.startWebServer(options);
     const address = server.address();
     const host = address.address === "::" ? "localhost" : address.address;
     reportText.logProgress(options, `[webserver] http://${host}:${address.port}`);

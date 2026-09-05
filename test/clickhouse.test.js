@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -11,6 +11,7 @@ const { buildReportFromClickHouse, loadConfiguration, saveConfiguration, syncDat
 const {
   ANALYTICS_DERIVATION_VERSION,
 } = require("../lib/core/derivation");
+const { CLAUDE_REQUEST_CHECKPOINT_LIMIT } = require("../lib/ingest/parser");
 const { createClickHouseBackend } = require("../lib/storage/clickhouse");
 const { defaultOptions } = require("./support/fixtures");
 
@@ -82,13 +83,83 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
     return current;
   }
 
+  function latestValidCheckpointRank(generations, targetIndex) {
+    const ranks = new Map(generations.slice(0, targetIndex + 1).map((row, index) => [row.generation_id, index]));
+    return (activeRows.import_generation_checkpoints || []).reduce((latest, checkpoint) => {
+      const rank = ranks.get(checkpoint.generation_id);
+      if (rank === undefined) return latest;
+      const previous = rank > 0 ? generations[rank - 1] : null;
+      const valid = checkpoint.base_generation_id === checkpoint.generation_id || (
+        (checkpoint.base_generation_id || "") === (previous?.generation_id || "")
+        && Number(checkpoint.base_committed_at_ms || 0) === Number(previous?.committed_at_ms || 0)
+      );
+      return valid ? Math.max(latest, rank) : latest;
+    }, -1);
+  }
+
   function visibleRows(table, generationId = latestGeneration()?.generation_id) {
-    const manifest = new Map((activeRows.import_generation_sources || [])
-      .filter((row) => row.generation_id === generationId)
-      .map((row) => [row.source_path, row.import_id || ""]));
-    return (activeRows[table] || []).filter((row) => (
-      manifest.get(row.source_path) === (row.import_id || "")
+    const generations = [...(activeRows.import_generations || [])].sort((a, b) => (
+      Number(a.committed_at_ms) - Number(b.committed_at_ms)
+      || String(a.generation_id).localeCompare(String(b.generation_id))
     ));
+    const targetIndex = generations.findIndex((row) => row.generation_id === generationId);
+    if (targetIndex < 0) return [];
+    const generationRank = new Map(generations.slice(0, targetIndex + 1).map((row, index) => [row.generation_id, index]));
+    const checkpointRank = latestValidCheckpointRank(generations, targetIndex);
+    const snapshotRank = checkpointRank < 0 ? targetIndex : checkpointRank;
+    const manifestHistory = [
+      ...(activeRows.import_generation_sources || []).filter((row) => (
+        generationRank.get(row.generation_id) === snapshotRank
+      )),
+      ...(activeRows.import_generation_source_deltas || []).filter((row) => (
+        generationRank.has(row.generation_id)
+        && generationRank.get(row.generation_id) > checkpointRank
+      )),
+    ];
+    const headRank = new Map();
+    for (const row of manifestHistory) {
+      const rank = generationRank.get(row.generation_id);
+      if (rank >= (headRank.get(row.source_path) ?? -1)) headRank.set(row.source_path, rank);
+    }
+    const manifest = manifestHistory.filter((row) => (
+      !row.deleted && generationRank.get(row.generation_id) === headRank.get(row.source_path)
+    ));
+    const watermarks = new Map();
+    for (const row of manifestHistory) {
+      if (row.deleted || row.committed_segment_end === undefined || row.committed_segment_end === null) continue;
+      const key = `${row.source_path}\0${row.import_id || ""}`;
+      watermarks.set(key, Math.max(watermarks.get(key) ?? 0, Number(row.committed_segment_end)));
+    }
+    const activeImports = new Map(manifest.map((row) => [
+      `${row.source_path}\0${row.import_id || ""}`,
+      watermarks.get(`${row.source_path}\0${row.import_id || ""}`) ?? null,
+    ]));
+    const rows = (activeRows[table] || []).filter((row) => {
+      const key = `${row.source_path}\0${row.import_id || ""}`;
+      if (!activeImports.has(key)) return false;
+      const committedSegmentEnd = activeImports.get(key);
+      if (committedSegmentEnd === null) return true;
+      const rowSegmentEnd = table === "output_char_metrics"
+        ? Number(row.metric_revision || 0)
+        : Number(row.segment_end || 0);
+      return rowSegmentEnd <= committedSegmentEnd;
+    });
+    const keyed = new Map();
+    for (const row of rows) {
+      let key = null;
+      if (table === "usage_events") key = `${row.source_path}\0${row.import_id || ""}\0${row.event_key || `line:${row.line_no || 0}`}`;
+      else if (table === "output_char_metrics") key = `${row.source_path}\0${row.import_id || ""}\0${row.turn_key || JSON.stringify(row)}`;
+      else if (table === "rate_limit_samples") key = `${row.source_path}\0${row.import_id || ""}\0${row.line_no || 0}\0${row.sample_key || ""}\0${row.sequence || 0}`;
+      else if (table === "telemetry_events") key = `${row.source_path}\0${row.import_id || ""}\0${row.line_no || 0}\0${row.event_kind || ""}`;
+      else if (table === "sessions") key = `${row.source_path}\0${row.import_id || ""}\0${row.segment_start || 0}\0${row.segment_end || 0}`;
+      else if (table === "sources") key = `${row.source_path}\0${row.import_id || ""}`;
+      if (key === null) return rows;
+      const previous = keyed.get(key);
+      if (!previous || Number(row.metric_revision || row.segment_end || 0) >= Number(previous.metric_revision || previous.segment_end || 0)) {
+        keyed.set(key, row);
+      }
+    }
+    return [...keyed.values()];
   }
 
   const server = http.createServer((request, response) => {
@@ -163,10 +234,50 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
         activeRows[table] = (activeRows[table] || []).filter((row) => row.source_path !== sourcePath);
       }
 
-      if (query.includes("FROM import_generations") && query.includes("committed_at_ms")) {
+      if (query.includes("FROM import_generations") && query.includes("ORDER BY committed_at_ms DESC")) {
         const generation = latestGeneration();
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         response.end(generation ? `${JSON.stringify(generation)}\n` : "");
+        return;
+      }
+
+      if (
+        query.includes("SELECT checkpoint.generation_id AS generation_id")
+        && query.includes("FROM import_generation_checkpoints AS checkpoint")
+      ) {
+        const targetGeneration = url.searchParams.get("param_generation");
+        const targetCommittedAt = Number(url.searchParams.get("param_committedAt"));
+        const checkpoint = [...(activeRows.import_generation_checkpoints || [])]
+          .filter((row) => (
+            Number(row.committed_at_ms) < targetCommittedAt
+            || (
+              Number(row.committed_at_ms) === targetCommittedAt
+              && String(row.generation_id).localeCompare(targetGeneration) <= 0
+            )
+          ))
+          .sort((a, b) => (
+            Number(b.committed_at_ms) - Number(a.committed_at_ms)
+            || String(b.generation_id).localeCompare(String(a.generation_id))
+          ))[0];
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        response.end(checkpoint ? `${JSON.stringify({ generation_id: checkpoint.generation_id })}\n` : "");
+        return;
+      }
+
+      if (query.includes("AS delta_generations") && query.includes("FROM manifest_deltas")) {
+        const targetGeneration = url.searchParams.get("param_generation");
+        const generations = [...(activeRows.import_generations || [])].sort((a, b) => (
+          Number(a.committed_at_ms) - Number(b.committed_at_ms)
+          || String(a.generation_id).localeCompare(String(b.generation_id))
+        ));
+        const targetRank = generations.findIndex((row) => row.generation_id === targetGeneration);
+        const ranks = new Map(generations.slice(0, targetRank + 1).map((row, index) => [row.generation_id, index]));
+        const checkpointRank = latestValidCheckpointRank(generations, targetRank);
+        const manifestGenerations = new Set((activeRows.import_generation_source_deltas || [])
+          .filter((row) => ranks.has(row.generation_id) && ranks.get(row.generation_id) > checkpointRank)
+          .map((row) => row.generation_id));
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        response.end(`${JSON.stringify({ delta_generations: manifestGenerations.size })}\n`);
         return;
       }
 
@@ -206,10 +317,30 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
 
       if (query.includes("FROM import_generation_sources") && query.includes("source.fingerprint")) {
         const generationId = url.searchParams.get("param_generation");
-        const rows = visibleRows("sources", generationId).map((row) => ({
+        const rowsBySource = new Map();
+        const importsBySource = new Map();
+        for (const row of visibleRows("sources", generationId)) {
+          importsBySource.set(row.source_path, (importsBySource.get(row.source_path) || new Set()).add(row.import_id || ""));
+          const previous = rowsBySource.get(row.source_path);
+          if (!previous || Number(row.segment_end || 0) >= Number(previous.segment_end || 0)) {
+            rowsBySource.set(row.source_path, row);
+          }
+        }
+        const rows = [...rowsBySource.values()].map((row) => ({
           source_path: row.source_path,
           import_id: row.import_id || "",
           fingerprint: row.fingerprint,
+          imported_at: row.imported_at || "",
+          cursor_version: row.cursor_version || 0,
+          segment_start: row.segment_start || 0,
+          segment_end: row.segment_end || 0,
+          cursor_line: row.cursor_line || 0,
+          cursor_guard: row.cursor_guard || "",
+          cursor_prefix_guard: row.cursor_prefix_guard || "",
+          parser_checkpoint: row.parser_checkpoint || "",
+          file_device: row.file_device || "",
+          file_inode: row.file_inode || "",
+          active_import_count: importsBySource.get(row.source_path)?.size || 0,
         }));
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         response.end(rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
@@ -230,6 +361,14 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
           rowsBySession.set(row.session_id, row);
         }
         const rows = [...rowsBySession.values()];
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        response.end(rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
+        return;
+      }
+
+      if (query.includes("FROM committed_sessions") && query.includes("stats_json")) {
+        const generationId = url.searchParams.get("param_generation");
+        const rows = visibleRows("sessions", generationId);
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         response.end(rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
         return;
@@ -269,7 +408,7 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
           pricedOutput: usageRows,
           pricedReasoningOutput: 0,
         })}\n`);
-      } else if (query.includes("FROM sources AS source") && query.includes("countIf")) {
+      } else if (query.includes("FROM sources AS source") && query.includes("uniqExactIf")) {
         response.end(JSON.stringify({ files: 1, zipEntries: 0, zipFiles: 0 }) + "\n");
       } else {
         response.end("");
@@ -349,7 +488,7 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -385,6 +524,18 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
       .filter((row) => temporalModels.has(row.model) && row.effective_from === currentFrom)
       .map((row) => [`${row.model}:${row.variant}`, row]));
     mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
+      if (row.model === "gpt-6-astra") return [];
+      if (row.model === "gpt-5.6-sol") {
+        if (row.effective_until !== "2026-08-20T23:59:59.999Z") return [];
+        return [{
+          ...row,
+          revision: legacyRevision,
+          row_id: `${row.provider}:${row.model}:${row.variant}`,
+          effective_from: "",
+          effective_until: "",
+          source_url: "https://developers.openai.com/api/docs/pricing",
+        }];
+      }
       if (!temporalModels.has(row.model)) return [{ ...row, revision: legacyRevision }];
       if (row.effective_until !== historicalUntil) return [];
       const current = currentRows.get(`${row.model}:${row.variant}`);
@@ -406,8 +557,13 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
+    assert.ok(upgraded.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
+    const solRows = upgraded.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
+    assert.equal(solRows.length, 4);
+    assert.equal(solRows.filter((row) => row.effectiveUntil === "2026-08-20T23:59:59.999Z").length, 2);
+    assert.equal(solRows.filter((row) => row.effectiveFrom === "2026-08-21T00:00:00.000Z").length, 2);
     const temporalRows = upgraded.prices.filter((row) => temporalModels.has(row.model));
     assert.equal(temporalRows.length, 8);
     assert.equal(temporalRows.filter((row) => row.effectiveUntil === historicalUntil).length, 4);
@@ -447,6 +603,18 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
       if (row.key === "pricingRevision") row.value_json = JSON.stringify(legacyPricingRevision);
     }
     mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
+      if (row.model === "gpt-6-astra") return [];
+      if (row.model === "gpt-5.6-sol") {
+        if (row.effective_until !== "2026-08-20T23:59:59.999Z") return [];
+        return [{
+          ...row,
+          revision: legacyRevision,
+          row_id: `${row.provider}:${row.model}:${row.variant}`,
+          effective_from: "",
+          effective_until: "",
+          source_url: "https://developers.openai.com/api/docs/pricing",
+        }];
+      }
       if (!temporalModels.has(row.model)) {
         return [{
           ...row,
@@ -480,7 +648,7 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")));
-    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
 
     const stableStart = mock.requests.length;
     assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
@@ -493,18 +661,18 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(mock.requests.slice(futureProjectionStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     futureMetadata.pricing_projection_revision = "2";
-    futureMetadata.packaged_revision = "packaged-5";
+    futureMetadata.packaged_revision = "packaged-6";
     const futurePackageStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-5 is newer than packaged-4/);
+    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-6 is newer than packaged-5/);
     assert.equal(mock.requests.slice(futurePackageStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     mock.activeRows.configuration_metadata = mock.activeRows.configuration_metadata
       .filter((row) => row.revision !== upgraded.revision);
     mock.activeRows.analytics_settings.find((row) => (
       row.revision === upgraded.revision && row.key === "pricingRevision"
-    )).value_json = JSON.stringify(`packaged-5:${"e".repeat(32)}`);
+    )).value_json = JSON.stringify(`packaged-6:${"e".repeat(32)}`);
     const futurePublicStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-5:.* is newer than packaged-4/);
+    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-6:.* is newer than packaged-5/);
     assert.equal(mock.requests.slice(futurePublicStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
   });
 });
@@ -536,7 +704,7 @@ test("ClickHouse rebuilds managed overlays when projection metadata is stale", a
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -573,7 +741,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
     assert.equal(upgraded.settings.monthlyCostLimitUsd, 321);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
@@ -582,7 +750,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     assert.match(requests[usageOverlay].query, /parseDateTime64BestEffortOrNull\(toString\(raw\.timestamp\)\)/);
     assert.ok(mock.activeRows.configuration_metadata.some((row) => (
       row.revision === upgraded.revision && row.managed_pricing === 1 &&
-      row.packaged_revision === "packaged-4" && row.pricing_projection_revision === "2"
+      row.packaged_revision === "packaged-5" && row.pricing_projection_revision === "2"
     )));
 
     const stableStart = mock.requests.length;
@@ -658,7 +826,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     await loadConfiguration(options);
 
     const legacyRevision = "81fbbf48-6215-419b-bffb-ddd36a1e96d4";
-    const legacyPricingRevision = "packaged-4:fd7377f5073cecef6e9f9b83e190c1c4";
+    const legacyPricingRevision = "packaged-5:fd7377f5073cecef6e9f9b83e190c1c4";
     const historicalUntil = "2026-07-29T23:59:59.999Z";
     const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
     mock.activeRows.configuration_revisions[0].revision = legacyRevision;
@@ -713,7 +881,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     const rebasedLuna = rebased.prices.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short");
 
     assert.notEqual(rebased.revision, legacyRevision);
-    assert.match(rebased.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+    assert.match(rebased.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
     assert.equal(rebasedLuna.input, 99);
     assert.equal(rebased.prices.some((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z"), false);
     assert.ok(rebaseRequests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
@@ -829,6 +997,8 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     assert.ok(queries.some((query) => query === "DROP TABLE IF EXISTS sessions"));
     assert.ok(queries.some((query) => query === "DROP TABLE IF EXISTS codex_sessions"));
     assert.ok(queries.some((query) => query === "DROP TABLE IF EXISTS import_generations"));
+    assert.ok(queries.some((query) => query === "DROP TABLE IF EXISTS import_generation_checkpoints"));
+    assert.ok(queries.some((query) => query === "DROP TABLE IF EXISTS import_generation_source_deltas"));
     assert.ok(queries.some((query) => query === "DROP TABLE IF EXISTS sources"));
     assert.ok(queries.some((query) => (
       query.includes("CREATE TABLE IF NOT EXISTS codex_sessions")
@@ -862,7 +1032,7 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     assert.match(usageStatsQuery, /'agents'/);
     assert.match(usageStatsQuery, /\(provider, model, effort, date_key\)/);
     assert.equal((usageStatsQuery.match(/FROM usage_events AS raw/g) || []).length, 1);
-    assert.doesNotMatch(usageStatsQuery, /UNION ALL/);
+    assert.doesNotMatch(usageStatsQuery.slice(usageStatsQuery.indexOf("usage_events_with_dimensions AS")), /UNION ALL/);
     assert.equal(mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
     assert.equal(JSON.parse(mock.inserts.usage_events[0].body.trim().split("\n")[0]).service_tier, "unknown");
     const firstUsageRow = JSON.parse(mock.inserts.usage_events[0].body.trim().split("\n")[0]);
@@ -927,6 +1097,697 @@ test("ClickHouse usage sink flushes independently on the row limit", async () =>
 
   assert.deepEqual(mock.inserts.usage_events.map((insert) => insert.rows), [2, 2, 1]);
   assert.equal(mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
+});
+
+test("ClickHouse publishes only complete appended JSONL records in one stable source epoch", async () => {
+  const jsonl = createSessionFile({ rows: 2 });
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_append_segment_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    const initial = await syncDatabase(options);
+    assert.equal(initial.total.requests, 2);
+    assert.equal(mock.visibleRows("sources").length, 1);
+    assert.ok(mock.visibleRows("sources")[0].parser_checkpoint);
+    const initialGenerationCount = mock.activeRows.import_generations.length;
+    const initialOffset = mock.visibleRows("sources")[0].segment_end;
+
+    const appendedRecord = JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-07-05T00:00:02.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: {
+            input_tokens: 2,
+            cached_input_tokens: 0,
+            output_tokens: 1,
+          },
+          model_context_window: 128_000,
+        },
+      },
+    });
+    fs.appendFileSync(jsonl, appendedRecord);
+    const partial = await syncDatabase(options);
+    assert.equal(partial.total.requests, 2);
+    assert.equal(mock.activeRows.import_generations.length, initialGenerationCount);
+
+    fs.appendFileSync(jsonl, "\n");
+    const appended = await syncDatabase(options);
+    assert.equal(appended.total.requests, 3);
+    assert.equal(appended.sessions.length, 1);
+    assert.equal(appended.sessions[0].lines, 5);
+    assert.equal(mock.activeRows.import_generations.length, initialGenerationCount + 1);
+    assert.equal(mock.visibleRows("usage_events").length, 3);
+    assert.equal(mock.visibleRows("sources").length, 1);
+    const segments = mock.activeRows.sources
+      .filter((row) => row.source_path === jsonl)
+      .sort((a, b) => a.segment_start - b.segment_start);
+    assert.equal(segments.length, 2);
+    assert.equal(segments[0].import_id, segments[1].import_id);
+    assert.equal(segments[1].segment_start, initialOffset);
+    assert.equal(segments[1].cursor_line, 5);
+    assert.equal(
+      mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0),
+      3,
+      "the append must insert only the new usage row",
+    );
+  });
+});
+
+test("ClickHouse replaces the provisional metric for an open final Codex turn", async () => {
+  const jsonl = createSessionFile({ rows: 0 });
+  const turnId = "019f4973-7053-7623-a798-0e4cf81ef0aa";
+  fs.appendFileSync(jsonl, [
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-07-05T00:00:01.000Z",
+      payload: { turn_id: turnId, cwd: "/tmp/open-turn", model: "gpt-5.4-mini", effort: "medium" },
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-07-05T00:00:02.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 4 },
+          total_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 4 },
+        },
+      },
+    }),
+    JSON.stringify({
+      type: "response_item",
+      timestamp: "2026-07-05T00:00:03.000Z",
+      payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "abcdefghij" }] },
+    }),
+    "",
+  ].join("\n"));
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_open_turn_metric_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+    assert.equal(mock.visibleRows("output_char_metrics").length, 1);
+    assert.equal(mock.visibleRows("output_char_metrics")[0].visible_output_tokens, 4);
+    assert.ok(JSON.parse(mock.visibleRows("sources")[0].parser_checkpoint).turn);
+
+    fs.appendFileSync(jsonl, `${JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-07-05T00:00:04.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { input_tokens: 2, cached_input_tokens: 0, output_tokens: 2 },
+          total_token_usage: { input_tokens: 12, cached_input_tokens: 0, output_tokens: 6 },
+        },
+      },
+    })}\n`);
+    await syncDatabase(options);
+
+    const logicalMetrics = mock.visibleRows("output_char_metrics");
+    assert.equal(logicalMetrics.length, 1);
+    assert.equal(logicalMetrics[0].turn_key, `id:${turnId}`);
+    assert.equal(logicalMetrics[0].visible_output_chars, 10);
+    assert.equal(logicalMetrics[0].visible_output_tokens, 2);
+    assert.equal(mock.activeRows.output_char_metrics.length, 2);
+  });
+});
+
+test("ClickHouse preserves multiple request metrics within one Codex turn", async () => {
+  const jsonl = createSessionFile({ rows: 0 });
+  const turnId = "019f4973-7053-7623-a798-0e4cf81ef0ab";
+  const tokenCount = (timestamp, totalInput, totalOutput) => ({
+    type: "event_msg",
+    timestamp,
+    payload: {
+      type: "token_count",
+      info: {
+        last_token_usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 2 },
+        total_token_usage: { input_tokens: totalInput, cached_input_tokens: 0, output_tokens: totalOutput },
+      },
+    },
+  });
+  fs.appendFileSync(jsonl, `${[
+    {
+      type: "turn_context",
+      timestamp: "2026-07-05T00:00:01.000Z",
+      payload: { turn_id: turnId, cwd: "/tmp/multi-metric", model: "gpt-5.4-mini", effort: "medium" },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-07-05T00:00:02.000Z",
+      payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "abcd" }] },
+    },
+    tokenCount("2026-07-05T00:00:03.000Z", 1, 2),
+    {
+      type: "response_item",
+      timestamp: "2026-07-05T00:00:04.000Z",
+      payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "abcdef" }] },
+    },
+    tokenCount("2026-07-05T00:00:05.000Z", 2, 4),
+  ].map(JSON.stringify).join("\n")}\n`);
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const report = await syncDatabase(defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_multi_metric_turn_test",
+      paths: [jsonl],
+      progress: false,
+    }));
+    const metrics = mock.visibleRows("output_char_metrics");
+    assert.equal(metrics.length, 2);
+    assert.equal(metrics.reduce((sum, row) => sum + row.visible_output_chars, 0), 10);
+    assert.equal(metrics.reduce((sum, row) => sum + row.visible_output_tokens, 0), 4);
+    assert.deepEqual(metrics.map((row) => row.turn_key).sort(), [
+      `id:${turnId}`,
+      `id:${turnId}:request:7`,
+    ]);
+  });
+});
+
+test("ClickHouse append storage stays linear beyond the former 128-segment boundary", async () => {
+  const changing = createSessionFile({ rows: 1, sessionId: "019f4973-7053-7623-a798-0e4cf81ef0b1" });
+  const unchanged = createSessionFile({ rows: 1, sessionId: "019f4973-7053-7623-a798-0e4cf81ef0b2" });
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_linear_append_test",
+      paths: [changing, unchanged],
+      progress: false,
+    });
+    await syncDatabase(options);
+    const epoch = mock.visibleRows("sources").find((row) => row.source_path === changing).import_id;
+
+    for (let index = 0; index < 130; index += 1) {
+      fs.appendFileSync(changing, `${JSON.stringify({
+        type: "event_msg",
+        timestamp: `2026-07-05T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { input_tokens: index + 2, cached_input_tokens: 0, output_tokens: 1 },
+            model_context_window: 128_000,
+          },
+        },
+      })}\n`);
+      await syncDatabase(options);
+    }
+
+    const changingSources = mock.activeRows.sources.filter((row) => row.source_path === changing);
+    const unchangedSources = mock.activeRows.sources.filter((row) => row.source_path === unchanged);
+    const changingSnapshots = mock.activeRows.import_generation_sources.filter((row) => row.source_path === changing);
+    const changingDeltas = mock.activeRows.import_generation_source_deltas.filter((row) => row.source_path === changing);
+    const unchangedSnapshots = mock.activeRows.import_generation_sources.filter((row) => row.source_path === unchanged);
+    const unchangedDeltas = mock.activeRows.import_generation_source_deltas.filter((row) => row.source_path === unchanged);
+    assert.equal(changingSources.length, 131);
+    assert.ok(changingSources.every((row) => row.import_id === epoch));
+    assert.equal(unchangedSources.length, 1);
+    assert.equal(changingSnapshots.length, 2);
+    assert.equal(changingDeltas.length, 130);
+    assert.equal(unchangedSnapshots.length, 2, "unchanged sources are copied only into bounded metadata checkpoints");
+    assert.equal(unchangedDeltas.length, 0);
+    assert.equal(mock.activeRows.import_generation_checkpoints.length, 2);
+    const checkpointGeneration = mock.activeRows.import_generation_checkpoints.at(-1).generation_id;
+    const checkpointIndex = mock.activeRows.import_generations.findIndex((row) => row.generation_id === checkpointGeneration);
+    const boundedManifestGenerations = new Set(mock.activeRows.import_generation_source_deltas
+      .filter((row) => mock.activeRows.import_generations.findIndex((generation) => generation.generation_id === row.generation_id) > checkpointIndex)
+      .map((row) => row.generation_id));
+    assert.equal(boundedManifestGenerations.size, 1, "report delta reconstruction must be bounded after a checkpoint");
+    const deltaDdl = mock.requests.find((request) => (
+      request.query.includes("CREATE TABLE IF NOT EXISTS import_generation_source_deltas")
+    ))?.query;
+    assert.match(deltaDdl, /ORDER BY \(committed_at_ms, generation_id, source_path\)/);
+    const manifestQuery = mock.requests.find((request) => request.query.includes("manifest_deltas AS"))?.query;
+    assert.match(manifestQuery, /tuple\(manifest\.committed_at_ms, manifest\.generation_id\) > checkpoint\.boundary/);
+    assert.equal(mock.activeRows.usage_events.filter((row) => row.source_path === changing).length, 131);
+    assert.equal(mock.visibleRows("usage_events").filter((row) => row.source_path === changing).length, 131);
+  });
+});
+
+test("ClickHouse Claude append resumes exact request-id deduplication", async () => {
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-claude-append-test-"));
+  const jsonl = Path.join(dir, "claude-session.jsonl");
+  const claudeRecord = (requestId, timestamp) => JSON.stringify({
+    type: "assistant",
+    timestamp,
+    requestId,
+    cwd: "/tmp/claude-append",
+    message: {
+      model: "claude-opus-4-8",
+      usage: { input_tokens: 10, output_tokens: 2 },
+    },
+  });
+  fs.writeFileSync(jsonl, `${claudeRecord("req-a", "2026-08-15T00:00:00.000Z")}\n`);
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_claude_append_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+    const firstCheckpoint = JSON.parse(mock.visibleRows("sources")[0].parser_checkpoint);
+    assert.equal(firstCheckpoint.kind, "claude");
+    assert.deepEqual(firstCheckpoint.recentRequestIds, ["req-a"]);
+
+    fs.appendFileSync(jsonl, [
+      claudeRecord("req-a", "2026-08-15T00:00:01.000Z"),
+      claudeRecord("req-b", "2026-08-15T00:00:02.000Z"),
+      "",
+    ].join("\n"));
+    const report = await syncDatabase(options);
+
+    assert.equal(report.total.requests, 2);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(mock.visibleRows("sources").length, 1);
+    assert.equal(mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0), 2);
+    const latest = mock.visibleRows("sources").sort((a, b) => a.segment_end - b.segment_end).at(-1);
+    assert.deepEqual(JSON.parse(latest.parser_checkpoint).recentRequestIds, ["req-a", "req-b"]);
+  });
+});
+
+test("ClickHouse Claude append resumes unkeyed usage by global line number", async () => {
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-claude-unkeyed-test-"));
+  const jsonl = Path.join(dir, "claude-session.jsonl");
+  const claudeRecord = (timestamp) => JSON.stringify({
+    type: "assistant",
+    timestamp,
+    cwd: "/tmp/claude-unkeyed",
+    message: {
+      model: "claude-opus-4-8",
+      usage: { input_tokens: 10, output_tokens: 2 },
+    },
+  });
+  fs.writeFileSync(jsonl, `${claudeRecord("2026-08-15T00:00:00.000Z")}\n`);
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_claude_unkeyed_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+    const sourceBefore = mock.visibleRows("sources")[0];
+    assert.deepEqual(JSON.parse(sourceBefore.parser_checkpoint).recentRequestIds, []);
+
+    fs.appendFileSync(jsonl, `${claudeRecord("2026-08-15T00:00:01.000Z")}\n`);
+    const report = await syncDatabase(options);
+
+    assert.equal(report.total.requests, 2);
+    assert.deepEqual(mock.visibleRows("usage_events").map((row) => row.event_key), ["line:1", "line:2"]);
+    assert.equal(mock.visibleRows("sources")[0].import_id, sourceBefore.import_id);
+  });
+});
+
+test("ClickHouse append cursor validates guards when size and mtime are unchanged", async () => {
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-guarded-fingerprint-test-"));
+  const jsonl = Path.join(dir, "claude-session.jsonl");
+  const claudeRecord = (requestId) => JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-08-15T00:00:00.000Z",
+    requestId,
+    cwd: "/tmp/claude-guarded-fingerprint",
+    message: {
+      model: "claude-opus-4-8",
+      usage: { input_tokens: 10, output_tokens: 2 },
+    },
+  });
+  const initial = `${claudeRecord("req-a")}\n`;
+  const replacement = `${claudeRecord("req-b")}\n`;
+  assert.equal(Buffer.byteLength(replacement), Buffer.byteLength(initial));
+  fs.writeFileSync(jsonl, initial);
+  const originalStat = fs.statSync(jsonl);
+  const mock = createClickHouseServer();
+  const progressEvents = [];
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_guarded_fingerprint_test",
+      paths: [jsonl],
+      progress: false,
+      onSyncProgress: (event) => progressEvents.push(event),
+    });
+    await syncDatabase(options);
+    const originalImportId = mock.visibleRows("sources")[0].import_id;
+
+    fs.writeFileSync(jsonl, replacement);
+    fs.utimesSync(jsonl, originalStat.atimeMs / 1_000, originalStat.mtimeMs / 1_000);
+    const replacementStat = fs.statSync(jsonl);
+    assert.equal(replacementStat.size, originalStat.size);
+    assert.equal(replacementStat.mtimeMs, originalStat.mtimeMs);
+
+    const secondSyncProgress = progressEvents.length;
+    const report = await syncDatabase(options);
+    assert.equal(report.total.requests, 1);
+    assert.equal(mock.visibleRows("usage_events")[0].event_key, "request:req-b");
+    assert.notEqual(mock.visibleRows("sources")[0].import_id, originalImportId);
+    assert.equal(
+      progressEvents.slice(secondSyncProgress).find((event) => event.phase === "processing")?.candidateSources,
+      1,
+      "the guard mismatch must enter the fork-aware changed-source pre-scan",
+    );
+  });
+});
+
+test("ClickHouse Claude deduplication stays exact after the bounded checkpoint window", async () => {
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-claude-bounded-test-"));
+  const jsonl = Path.join(dir, "claude-long-session.jsonl");
+  const claudeRecord = (requestId, second) => JSON.stringify({
+    type: "assistant",
+    timestamp: `2026-08-15T00:00:${String(second % 60).padStart(2, "0")}.000Z`,
+    requestId,
+    cwd: "/tmp/claude-bounded",
+    message: { model: "claude-opus-4-8", usage: { input_tokens: 1, output_tokens: 1 } },
+  });
+  const initialCount = CLAUDE_REQUEST_CHECKPOINT_LIMIT + 6;
+  fs.writeFileSync(jsonl, `${Array.from({ length: initialCount }, (_, index) => claudeRecord(`req-${index}`, index)).join("\n")}\n`);
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_claude_bounded_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+    const sourceBefore = mock.visibleRows("sources")[0];
+    const checkpoint = JSON.parse(sourceBefore.parser_checkpoint);
+    assert.equal(checkpoint.recentRequestIds.length, CLAUDE_REQUEST_CHECKPOINT_LIMIT);
+    assert.equal(checkpoint.recentRequestIds.includes("req-0"), false);
+
+    fs.appendFileSync(jsonl, `${claudeRecord("req-0", initialCount)}\n${claudeRecord("req-new", initialCount + 1)}\n`);
+    const report = await syncDatabase(options);
+
+    assert.equal(report.total.requests, initialCount + 1);
+    assert.equal(mock.visibleRows("usage_events").length, initialCount + 1);
+    assert.equal(mock.activeRows.usage_events.length, initialCount + 2);
+    assert.equal(mock.visibleRows("sources")[0].import_id, sourceBefore.import_id);
+  });
+});
+
+test("ClickHouse rewrite replaces the old segment chain with one full import", async () => {
+  const jsonl = createSessionFile({ rows: 2 });
+  const replacement = createSessionFile({
+    rows: 1,
+    sessionId: "019f4973-7053-7623-a798-0e4cf81ef099",
+  });
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_rewrite_segment_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+    fs.writeFileSync(jsonl, fs.readFileSync(replacement));
+    const report = await syncDatabase(options);
+
+    assert.equal(report.total.requests, 1);
+    assert.equal(mock.visibleRows("usage_events").length, 1);
+    assert.equal(mock.visibleRows("sources").length, 1);
+    assert.equal(mock.visibleRows("sources")[0].segment_start, 0);
+    assert.equal(mock.activeRows.usage_events.length, 3, "the replaced import remains physically orphaned");
+  });
+});
+
+test("ClickHouse keeps a legacy multi-import manifest visible until one full epoch migration", async () => {
+  const jsonl = createSessionFile({ rows: 2, sessionId: "019f4973-7053-7623-a798-0e4cf81ef0c1" });
+  const mock = createClickHouseServer();
+  mock.activeRows.import_generations = [{ generation_id: "legacy-segments", committed_at_ms: 1 }];
+  mock.activeRows.import_generation_sources = [
+    { generation_id: "legacy-segments", source_path: jsonl, import_id: "segment-a", deleted: 0 },
+    { generation_id: "legacy-segments", source_path: jsonl, import_id: "segment-b", deleted: 0 },
+  ];
+  mock.activeRows.sources = [
+    { source_path: jsonl, import_id: "segment-a", fingerprint: "old-a", imported_at: "2026-01-01", segment_end: 100 },
+    { source_path: jsonl, import_id: "segment-b", fingerprint: "old-b", imported_at: "2026-01-02", segment_end: 200 },
+  ];
+  mock.activeRows.usage_events = [
+    { source_path: jsonl, import_id: "segment-a", event_key: "line:3", line_no: 3 },
+    { source_path: jsonl, import_id: "segment-b", event_key: "line:4", line_no: 4 },
+  ];
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_legacy_segments_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    const legacyReport = await buildReportFromClickHouse(options);
+    assert.equal(legacyReport.total.requests, 2);
+    assert.equal(mock.visibleRows("sources").length, 2);
+
+    const migrated = await syncDatabase(options);
+    assert.equal(migrated.total.requests, 2);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(mock.visibleRows("sources").length, 1);
+    assert.equal(mock.activeRows.usage_events.length, 4, "legacy rows stay physically recoverable but become inactive");
+  });
+});
+
+test("ClickHouse append failure leaves the previous generation visible", async () => {
+  const jsonl = createSessionFile({ rows: 1 });
+  const mock = createClickHouseServer({
+    failureAfterInsert: {
+      acceptedBatches: 1,
+      body: "injected append failure",
+      table: "usage_events",
+    },
+  });
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_append_failure_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+    const committedGenerations = mock.activeRows.import_generations.length;
+    fs.appendFileSync(jsonl, `${JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-07-05T00:00:03.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+          model_context_window: 128_000,
+        },
+      },
+    })}\n`);
+
+    await assert.rejects(syncDatabase(options), /injected append failure/);
+    assert.equal(mock.activeRows.import_generations.length, committedGenerations);
+    assert.equal(mock.visibleRows("usage_events").length, 1);
+    assert.equal(mock.visibleRows("sources").length, 1);
+
+    const recovered = await syncDatabase(options);
+    assert.equal(recovered.total.requests, 2);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(mock.visibleRows("sources").length, 1);
+  });
+});
+
+test("ClickHouse commit marker hides staged rows in an already-active source epoch", async () => {
+  const jsonl = createSessionFile({ rows: 1 });
+  const mock = createClickHouseServer({
+    failureAfterInsert: {
+      acceptedBatches: 0,
+      body: "injected manifest failure",
+      table: "import_generation_source_deltas",
+    },
+  });
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_marker_atomicity_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+    const committedGenerations = mock.activeRows.import_generations.length;
+    const committedOffset = mock.visibleRows("sources")[0].segment_end;
+    fs.appendFileSync(jsonl, `${JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-07-05T00:00:03.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+          model_context_window: 128_000,
+        },
+      },
+    })}\n`);
+
+    await assert.rejects(syncDatabase(options), /injected manifest failure/);
+    assert.equal(mock.activeRows.import_generations.length, committedGenerations);
+    assert.equal(mock.activeRows.usage_events.length, 2, "the delta was physically staged");
+    assert.equal(mock.activeRows.sources.length, 2, "the advanced cursor was physically staged");
+    assert.equal(mock.visibleRows("usage_events").length, 1, "the old manifest must hide the staged delta");
+    assert.equal(mock.visibleRows("sources")[0].segment_end, committedOffset, "the old manifest must pin the old cursor");
+    assert.equal((await buildReportFromClickHouse(options)).total.requests, 1);
+
+    const recovered = await syncDatabase(options);
+    assert.equal(recovered.total.requests, 2);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(mock.visibleRows("sources").length, 1);
+    assert.ok(mock.activeRows.usage_events.length > mock.visibleRows("usage_events").length, "retry duplicates remain physical only");
+  });
+});
+
+test("ClickHouse rejects a stale concurrent checkpoint and keeps the stable-epoch watermark", async () => {
+  const mock = createClickHouseServer();
+  const sourcePath = "/tmp/concurrent-stable-epoch.jsonl";
+  mock.activeRows.import_generations = [
+    { generation_id: "baseline", committed_at_ms: 0 },
+    { generation_id: "newer-offset", committed_at_ms: 1 },
+    { generation_id: "later-stale-writer", committed_at_ms: 2 },
+  ];
+  mock.activeRows.import_generation_checkpoints = [
+    { generation_id: "baseline", committed_at_ms: 0, base_generation_id: "", base_committed_at_ms: 0 },
+    {
+      generation_id: "later-stale-writer",
+      committed_at_ms: 2,
+      base_generation_id: "baseline",
+      base_committed_at_ms: 0,
+    },
+  ];
+  mock.activeRows.import_generation_sources = [
+    {
+      generation_id: "baseline",
+      source_path: sourcePath,
+      import_id: "stable-epoch",
+      committed_segment_end: 0,
+      deleted: 0,
+    },
+    {
+      generation_id: "later-stale-writer",
+      source_path: sourcePath,
+      import_id: "stable-epoch",
+      committed_segment_end: 100,
+      deleted: 0,
+    },
+  ];
+  mock.activeRows.import_generation_source_deltas = [
+    {
+      generation_id: "newer-offset",
+      source_path: sourcePath,
+      import_id: "stable-epoch",
+      committed_segment_end: 200,
+      deleted: 0,
+    },
+    {
+      generation_id: "later-stale-writer",
+      source_path: sourcePath,
+      import_id: "stable-epoch",
+      committed_segment_end: 100,
+      deleted: 0,
+    },
+  ];
+  mock.activeRows.sources = [
+    { source_path: sourcePath, import_id: "stable-epoch", segment_end: 100 },
+    { source_path: sourcePath, import_id: "stable-epoch", segment_end: 200 },
+  ];
+  mock.activeRows.usage_events = [
+    { source_path: sourcePath, import_id: "stable-epoch", segment_end: 100, event_key: "line:1", line_no: 1 },
+    { source_path: sourcePath, import_id: "stable-epoch", segment_end: 200, event_key: "line:2", line_no: 2 },
+  ];
+
+  await withServer(mock, async (url) => {
+    const report = await buildReportFromClickHouse(defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_monotonic_watermark_test",
+      progress: false,
+    }));
+    assert.equal(report.total.requests, 2);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(mock.visibleRows("sources")[0].segment_end, 200);
+    assert.ok(mock.requests.some((request) => request.query.includes("manifest_watermarks")));
+  });
+});
+
+test("ClickHouse session segment aggregation preserves non-numeric metadata", async () => {
+  const mock = createClickHouseServer();
+  const sourcePath = "/tmp/observed-session-segments.jsonl";
+  const observation = {
+    agent: "cursor-agent",
+    provider: "cursor",
+    model: "(unknown model)",
+    project: "/tmp/project",
+    measurement: "observed-only",
+    exactUsageAvailable: false,
+  };
+  mock.activeRows.import_generations = [{ generation_id: "committed", committed_at_ms: 1 }];
+  mock.activeRows.import_generation_sources = [{
+    generation_id: "committed",
+    source_path: sourcePath,
+    import_id: "stable-epoch",
+    committed_segment_end: 200,
+    deleted: 0,
+  }];
+  mock.activeRows.sessions = [
+    {
+      source_path: sourcePath,
+      import_id: "stable-epoch",
+      segment_start: 0,
+      segment_end: 100,
+      stats_json: JSON.stringify({ observation }),
+    },
+    {
+      source_path: sourcePath,
+      import_id: "stable-epoch",
+      segment_start: 100,
+      segment_end: 200,
+      stats_json: JSON.stringify({ observation }),
+    },
+  ];
+
+  await withServer(mock, async (url) => {
+    const report = await buildReportFromClickHouse(defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_session_metadata_test",
+      progress: false,
+    }));
+    assert.equal(report.sessions.length, 1);
+    assert.deepEqual(report.sessions[0].stats.observation, observation);
+  });
 });
 
 test("ClickHouse keeps the whole committed generation visible when a later source fails", async () => {
@@ -995,7 +1856,7 @@ test("ClickHouse keeps the whole committed generation visible when a later sourc
       request.query.trim() === "INSERT INTO import_generations FORMAT JSONEachRow"
     ));
     const lastDataInsert = mock.requests.findLastIndex((request) => (
-      /^INSERT INTO (usage_events|output_char_metrics|rate_limit_samples|telemetry_events|sessions|sources|codex_session_versions|import_generation_sources) FORMAT JSONEachRow$/.test(request.query.trim())
+      /^INSERT INTO (usage_events|output_char_metrics|rate_limit_samples|telemetry_events|sessions|sources|codex_session_versions|import_generation_sources|import_generation_source_deltas|import_generation_checkpoints) FORMAT JSONEachRow$/.test(request.query.trim())
     ));
     assert.ok(markerInsert > lastDataInsert, "the global generation marker must be published last");
 
@@ -1067,7 +1928,18 @@ test("ClickHouse report pins one committed generation across every query", async
   const usageStatsQuery = mock.requests.find((request) => request.query.includes("quarterHourlyProviderModels"))?.query;
   assert.ok(usageStatsQuery);
   assert.match(usageStatsQuery, /GROUP BY GROUPING SETS/);
-  assert.doesNotMatch(usageStatsQuery, /UNION ALL/);
+  assert.doesNotMatch(usageStatsQuery.slice(usageStatsQuery.indexOf("usage_events_with_dimensions AS")), /UNION ALL/);
+  const outputCharStatsQuery = mock.requests.find((request) => (
+    request.query.includes("visibleOutputTextChars")
+  ))?.query;
+  assert.ok(outputCharStatsQuery);
+  assert.match(outputCharStatsQuery, /GROUP BY GROUPING SETS/);
+  assert.match(outputCharStatsQuery, /'projectDaily'/);
+  assert.match(outputCharStatsQuery, /'modelEfforts'/);
+  assert.match(outputCharStatsQuery, /\(project, date_key\)/);
+  assert.match(outputCharStatsQuery, /\(model, effort\)/);
+  assert.equal((outputCharStatsQuery.match(/FROM output_char_metrics AS raw/g) || []).length, 1);
+  assert.doesNotMatch(outputCharStatsQuery.slice(outputCharStatsQuery.lastIndexOf("SELECT")), /UNION ALL/);
   const rateLimitQueries = mock.requests.filter((request) => request.query.includes("repriced_samples AS"));
   assert.equal(rateLimitQueries.length, 1, "rate-limit windows and attribution should share one window pass");
   const rateLimitQuery = rateLimitQueries[0]?.query;
@@ -1084,6 +1956,112 @@ test("ClickHouse report pins one committed generation across every query", async
   assert.doesNotMatch(planHistoryQuery, /any\((agent|limit_id)\)/);
   assert.match(usageStatsQuery, /toStartOfInterval\(parseDateTimeBestEffortOrNull\(timestamp\), INTERVAL 15 MINUTE\)/);
   assert.match(usageStatsQuery, /projectQuarterHourlyProviderModels/);
+});
+
+test("ClickHouse manifest query is accepted by the installed clickhouse-local analyzer", async (t) => {
+  const mock = createClickHouseServer();
+  const home = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-manifest-analyzer-test-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  mock.activeRows.import_generations = [{ generation_id: "analyzer-generation", committed_at_ms: 7 }];
+  mock.activeRows.import_generation_checkpoints = [{
+    generation_id: "analyzer-generation",
+    committed_at_ms: 7,
+    base_generation_id: "analyzer-generation",
+    base_committed_at_ms: 7,
+  }];
+  mock.activeRows.import_generation_sources = [{
+    generation_id: "analyzer-generation",
+    source_path: "/tmp/analyzer-session.jsonl",
+    import_id: "analyzer-import",
+    committed_segment_end: 10,
+    deleted: 0,
+  }];
+  mock.activeRows.sources = [{
+    source_path: "/tmp/analyzer-session.jsonl",
+    import_id: "analyzer-import",
+    segment_end: 10,
+  }];
+
+  await withServer(mock, async (url) => {
+    await syncDatabase(defaultOptions({
+      dbEngine: "clickhouse",
+      home,
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_manifest_analyzer_test",
+    }));
+  });
+
+  const query = mock.requests.find((request) => request.query.includes("uniqExact(source.import_id) AS active_import_count"))?.query;
+  assert.ok(query, "generation source query must be captured");
+  assert.match(query, /history\.source_path AS source_path/);
+  assert.match(query, /history\.import_id AS import_id/);
+  assert.match(query, /watermarks\.committed_segment_end AS committed_segment_end/);
+
+  const version = spawnSync("clickhouse", ["local", "--version"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (version.error?.code === "ENOENT") {
+    t.diagnostic("clickhouse-local is not installed; SQL shape contract was still checked");
+    return;
+  }
+  assert.ifError(version.error);
+  assert.equal(version.status, 0, version.stderr);
+
+  const statements = [
+    "CREATE TEMPORARY TABLE import_generations (generation_id String, committed_at_ms UInt64)",
+    `CREATE TEMPORARY TABLE import_generation_checkpoints (
+      committed_at_ms UInt64,
+      generation_id String,
+      base_committed_at_ms UInt64,
+      base_generation_id String
+    )`,
+    `CREATE TEMPORARY TABLE import_generation_sources (
+      generation_id String,
+      source_path String,
+      import_id String,
+      committed_segment_end Nullable(UInt64),
+      deleted UInt8
+    )`,
+    `CREATE TEMPORARY TABLE import_generation_source_deltas (
+      committed_at_ms UInt64,
+      generation_id String,
+      source_path String,
+      import_id String,
+      committed_segment_end Nullable(UInt64),
+      deleted UInt8
+    )`,
+    `CREATE TEMPORARY TABLE sources (
+      source_path String,
+      import_id String,
+      fingerprint String,
+      imported_at String,
+      cursor_version UInt64,
+      segment_start UInt64,
+      segment_end UInt64,
+      cursor_line UInt64,
+      cursor_guard String,
+      cursor_prefix_guard String,
+      parser_checkpoint String,
+      file_device String,
+      file_inode String
+    )`,
+    "INSERT INTO import_generations VALUES ('analyzer-generation', 7)",
+    "INSERT INTO import_generation_checkpoints VALUES (7, 'analyzer-generation', 7, 'analyzer-generation')",
+    "INSERT INTO import_generation_sources VALUES ('analyzer-generation', '/tmp/analyzer-session.jsonl', 'analyzer-import', 10, 0)",
+    "INSERT INTO sources VALUES ('/tmp/analyzer-session.jsonl', 'analyzer-import', 'fingerprint', '2026-09-03T00:00:00.000Z', 1, 0, 10, 1, '', '', '', '', '')",
+    query,
+  ];
+  const execution = spawnSync("clickhouse", [
+    "local",
+    "--param_generation=analyzer-generation",
+    ...statements.flatMap((statement) => ["--query", statement]),
+  ], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(execution.status, 0, execution.stderr);
+  assert.equal(JSON.parse(execution.stdout.trim()).source_path, "/tmp/analyzer-session.jsonl");
 });
 
 test("ClickHouse legacy header union uses explicit migration-safe column order", async () => {

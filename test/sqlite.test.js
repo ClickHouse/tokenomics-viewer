@@ -255,7 +255,7 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
   storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3', value_json = ? WHERE revision = ? AND key = 'pricingRevision'").run(JSON.stringify("packaged-3"), currentRevision);
   storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
   storedBefore.prepare("UPDATE pricing_catalog SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
-  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-3' AND model IN ('gpt-5.6-terra', 'gpt-5.6-luna')").run();
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-3' AND model IN ('gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')").run();
   const insertLegacy = storedBefore.prepare(`
     INSERT INTO pricing_catalog(
       revision, row_id, provider, model, match_mode, variant,
@@ -264,6 +264,7 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const [model, rates] of Object.entries({
+    "gpt-5.6-sol": { input: 5, cacheCreate30m: 6.25, cacheRead: 0.5, output: 30 },
     "gpt-5.6-terra": { input: 2, cacheCreate30m: 2.5, cacheRead: 0.2, output: 12 },
     "gpt-5.6-luna": { input: 0.2, cacheCreate30m: 0.25, cacheRead: 0.02, output: 1.2 },
   })) {
@@ -293,7 +294,12 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
 
   const migrated = await loadConfiguration(options);
   assert.notEqual(migrated.revision, "packaged-3");
-  assert.equal(migrated.settings.pricingRevision, "packaged-4");
+  assert.equal(migrated.settings.pricingRevision, "packaged-5");
+  assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
+  const solRows = migrated.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
+  assert.equal(solRows.length, 4);
+  assert.equal(solRows.filter((row) => row.effectiveUntil === "2026-08-20T23:59:59.999Z").length, 2);
+  assert.equal(solRows.filter((row) => row.effectiveFrom === "2026-08-21T00:00:00.000Z").length, 2);
   const targetRows = migrated.prices.filter((row) => row.provider === "openai" && ["gpt-5.6-terra", "gpt-5.6-luna"].includes(row.model));
   assert.equal(targetRows.length, 8);
   assert.equal(targetRows.filter((row) => row.effectiveUntil === "2026-07-29T23:59:59.999Z").length, 4);
@@ -313,6 +319,16 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
   assert.deepEqual(
     { input: historicalTerra.input, cacheCreate30m: historicalTerra.cacheCreate30m, cacheRead: historicalTerra.cacheRead, output: historicalTerra.output },
     { input: 2.5, cacheCreate30m: 3.125, cacheRead: 0.25, output: 15 },
+  );
+  const historicalSol = solRows.find((row) => row.variant === "short" && row.effectiveUntil);
+  const currentSol = solRows.find((row) => row.variant === "short" && row.effectiveFrom);
+  assert.deepEqual(
+    { input: historicalSol.input, cacheCreate30m: historicalSol.cacheCreate30m, cacheRead: historicalSol.cacheRead, output: historicalSol.output },
+    { input: 5, cacheCreate30m: 6.25, cacheRead: 0.5, output: 30 },
+  );
+  assert.deepEqual(
+    { input: currentSol.input, cacheCreate30m: currentSol.cacheCreate30m, cacheRead: currentSol.cacheRead, output: currentSol.output },
+    { input: 4, cacheCreate30m: 5, cacheRead: 0.4, output: 20 },
   );
 
   const storedAfter = new DatabaseSync(db);
