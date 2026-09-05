@@ -138,7 +138,10 @@ When running from a source checkout, replace `tokenomics-launch` with
 ## ClickHouse
 
 ClickHouse is the default and recommended database. The launcher normally
-installs and manages it, so manual setup is not required.
+installs and manages it, so manual setup is not required. The dashboard starts
+listening before the automatic sync finishes; `/api/sync` and the UI expose the
+running, succeeded, or failed state while synchronization continues in the
+background.
 
 The local defaults are:
 
@@ -201,6 +204,11 @@ Credentials can also be supplied through `TOKENOMICS_CLICKHOUSE_USER` and
 `TOKENOMICS_CLICKHOUSE_URL` and `TOKENOMICS_CLICKHOUSE_DATABASE` variables.
 Prefer environment variables to command-line passwords so credentials do not
 appear in shell history or process listings.
+
+Webserver mode binds its HTTP endpoint before the initial sync begins and serves
+a valid snapshot while `/api/sync` reports progress. Later syncs keep the last
+completed statistics readable; pass `--no-sync` to serve the current database
+without starting an automatic scan.
 
 ### Batching, Compression, and Reset
 
@@ -275,20 +283,48 @@ AIU checkpoints. VS Code journals are replayed to final request metadata while
 conversation and tool-response payloads are discarded; their reported prompt,
 completion, credit, and tool-round counters remain observational only.
 
-Sync is incremental by source fingerprint. Unchanged sessions are skipped;
-changed files or archive entries replace their previous normalized data. Codex
-fork metadata and replay traces are used to avoid counting inherited parent
-history again in subagent sessions.
+Sync is incremental by source fingerprint. Unchanged sessions are skipped.
+Plain append-only Codex and Claude Code JSONL files resume after the last
+complete newline, using a ClickHouse-stored byte cursor and resumable parser
+checkpoint; an incomplete trailing record waits for the next sync. The cursor
+binds the device/inode, a tail hash, and bounded prefix samples. Truncation,
+rotation, a changed guard, Codex fork/replay input, or an unsafe parser
+checkpoint falls back to a new full source epoch. The bounded guard deliberately
+trusts the append-only producer contract: hashing every byte on every sync would
+make a tiny append proportional to the lifetime of the file, and an in-place
+rewrite outside the sampled windows can therefore require a manual reset.
+
+Claude Code checkpoints retain only a bounded recent request-ID window. The
+durable ClickHouse event key (request ID when present, otherwise the global
+source line) remains the exact cross-append and retry deduplication authority,
+so an old duplicate does not force the checkpoint or parser memory to grow with
+the session. Compressed files, archive entries, and other adapters replace their
+previous normalized data. Codex fork metadata and replay traces avoid counting
+inherited parent history again in subagent sessions.
 
 All calendar buckets and range boundaries use UTC: day, ISO week, month, year,
 and the existing 15-minute timeline. A version upgrade that changes a derived
 field such as UTC calendar keys or service tier causes one full source reimport;
 later syncs return to normal fingerprint-based incrementality.
 
-ClickHouse source versions are immutable. A sync stages changed sources and a
-complete source manifest, then publishes one global generation marker last.
-Reports pin that generation, so a failed multi-source sync leaves the previous
-complete report visible instead of exposing a partial import.
+Each append-only ClickHouse source keeps one immutable epoch ID while new
+normalized rows are added only for the newly completed byte range. A rewrite
+starts a new epoch. A sync writes manifest deltas only for changed or removed
+sources. Every 128 delta generations it writes a metadata-only checkpoint of
+the current source heads, bounding later manifest reconstruction without
+rereading or reinserting session events. Deltas live in a time-ordered table,
+and reports constrain that primary-key range to post-checkpoint generations.
+Each checkpoint records its base generation; a checkpoint crossed by a
+concurrent commit is ignored while its changed-source delta remains available.
+The sync then publishes one global generation marker last. Reports reconstruct
+and pin both
+the active epoch and its committed byte offset at that marker,
+deduplicate idempotent retries by logical event key, and replace provisional
+open-turn metrics by turn key. A failed sync can leave recoverable staged rows,
+but they remain past the committed offset and therefore cannot advance either
+the report or the next parser cursor. Physical storage grows with newly observed
+events (plus failed staging retries and orphaned epochs after rewrites), not with
+repeated copies of the entire session or source manifest.
 
 Pricing revisions are deliberately excluded from source fingerprints. Editing
 a rate or adding a model updates normalized database costs without reopening
@@ -426,8 +462,10 @@ necessarily a user request or completed task, and tariff coverage means only
 that the local catalog recognized an event. Without outcome or quality data,
 Tokenomics does not rank effort levels as objectively better or worse.
 
-GPT-5.6 Sol, Terra, and Luna support separate input, cache-write, cache-read, and
-output rates. Legacy Codex `input_tokens` plus `cached_input_tokens` records are
+GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna support separate input,
+cache-write, cache-read, and output rates. Packaged GPT-5.6 Sol prices preserve
+the pre-August 21, 2026 tariff and apply the reduced rate from that date.
+Legacy Codex `input_tokens` plus `cached_input_tokens` records are
 treated as total input with cached input as a read subset. Explicit
 `cache_creation_input_tokens` plus `cache_read_input_tokens` records preserve
 cache writes separately. Tokenomics does not invent cache-write volume for
@@ -435,8 +473,8 @@ legacy records that cannot prove it.
 
 For standard pricing, Codex `thread_settings_applied.service_tier=priority`
 applies the documented ChatGPT fast-mode credit multipliers: `2.5x` for
-GPT-5.6 and GPT-5.5, and `2x` for GPT-5.4
-([official fast-mode documentation](https://developers.openai.com/codex/speed)).
+GPT-6 Astra, GPT-5.6, and GPT-5.5, and `2x` for GPT-5.4
+([official fast-mode documentation](https://learn.chatgpt.com/docs/agent-configuration/speed)).
 This is deliberately separate from API Priority processing. Missing or unknown
 tiers remain standard-priced instead of silently assuming fast mode. In
 particular, a forked child rollout that omits its own service tier does not

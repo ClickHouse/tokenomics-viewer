@@ -987,6 +987,62 @@ test("GPT-5.6 Luna and Terra packaged rates switch at the 2026-07-30 boundary", 
   }
 });
 
+test("GPT-5.6 Sol packaged rates switch at the 2026-08-21 boundary", () => {
+  const { defaultConfiguration } = require("../lib/core/configuration");
+  const pricingCatalog = defaultConfiguration().prices;
+  const usageValue = {
+    input: 1_000_000,
+    cacheCreate30m: 1_000_000,
+    cacheRead: 1_000_000,
+    output: 1_000_000,
+    inputIncludesCacheRead: false,
+  };
+  const before = new Date("2026-08-20T23:59:59.999Z");
+  const exact = new Date("2026-08-21T00:00:00.000Z");
+
+  for (const [variant, historical, current] of [
+    ["short", { input: 5, cachedInput: 0.5, cacheCreate30m: 6.25, output: 30 }, { input: 4, cachedInput: 0.4, cacheCreate30m: 5, output: 20 }],
+    ["long", { input: 10, cachedInput: 1, cacheCreate30m: 12.5, output: 45 }, { input: 8, cachedInput: 0.8, cacheCreate30m: 10, output: 30 }],
+  ]) {
+    assert.deepEqual(pricing.lookupOpenAIPrices("gpt-5.6-sol", usageValue, { openaiContext: variant }, before), historical);
+    assert.deepEqual(pricing.lookupOpenAIPrices("gpt-5.6-sol", usageValue, { openaiContext: variant }, exact), current);
+    const historicalCost = pricing.calculateCost("openai", "gpt-5.6-sol", usageValue, before, {
+      openaiContext: variant,
+      pricingCatalog,
+    });
+    const currentCost = pricing.calculateCost("openai", "gpt-5.6-sol", usageValue, exact, {
+      openaiContext: variant,
+      pricingCatalog,
+    });
+    assert.equal(historicalCost.amount, Object.values(historical).reduce((sum, value) => sum + value, 0));
+    assert.equal(currentCost.amount, Object.values(current).reduce((sum, value) => sum + value, 0));
+  }
+});
+
+test("GPT-6 Astra uses the official short and long-context rates", () => {
+  const usageValue = {
+    input: 1_000_000,
+    cacheCreate30m: 1_000_000,
+    cacheRead: 1_000_000,
+    output: 1_000_000,
+    inputIncludesCacheRead: false,
+  };
+  const date = new Date("2026-09-05T00:00:00.000Z");
+
+  assert.deepEqual(pricing.lookupOpenAIPrices("gpt-6-astra", usageValue, { openaiContext: "short" }, date), {
+    input: 10,
+    cachedInput: 1,
+    cacheCreate30m: 12.5,
+    output: 50,
+  });
+  assert.deepEqual(pricing.lookupOpenAIPrices("gpt-6-astra", usageValue, { openaiContext: "long" }, date), {
+    input: 20,
+    cachedInput: 2,
+    cacheCreate30m: 25,
+    output: 75,
+  });
+});
+
 test("unknown providers and models remain unpriced", () => {
   const usageValue = simpleUsage(1_000_000);
 
@@ -997,10 +1053,12 @@ test("unknown providers and models remain unpriced", () => {
 
 test("OpenAI priority service tier applies the model-specific fast multiplier", () => {
   const usageValue = simpleUsage(100_000, 100_000);
-  const date = new Date("2026-07-10T00:00:00.000Z");
+  const date = new Date("2026-09-05T00:00:00.000Z");
   const expectedMultipliers = {
+    "gpt-6-astra": 2.5,
     "gpt-5.5": 2.5,
     "gpt-5.6-sol": 2.5,
+    "gpt-5.6-terra": 2.5,
     "gpt-5.6-luna": 2.5,
     "gpt-5.4": 2,
   };

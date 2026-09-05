@@ -36,6 +36,7 @@ test("ClickHouse pricing projection applies packaged fast multipliers from servi
   assert.match(sql.projection, /= 'priority'/);
   assert.match(sql.projection, /= 'fast'/);
   assert.match(sql.projection, /2\.5/);
+  assert.match(sql.projection, /Z3B0LTYtYXN0cmE=/);
   assert.match(sql.projection, /, 2,/);
 
   const custom = defaultConfiguration();

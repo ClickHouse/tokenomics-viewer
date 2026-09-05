@@ -7,6 +7,7 @@ const Path = require("node:path");
 const test = require("node:test");
 const {
   browserCommand,
+  dashboardReady,
   downloadClickHouseInstaller,
   ensureClickHouse,
   findExecutable,
@@ -17,6 +18,32 @@ const {
   runLauncher,
   waitForDashboardProcess,
 } = require("../lib/launcher");
+
+async function withStatusServer(payload, callback) {
+  const http = require("node:http");
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(payload));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await callback(`http://127.0.0.1:${server.address().port}`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test("dashboard readiness requires a loopback sync-capable endpoint and the selected engine", async () => {
+  await withStatusServer({ sync: { available: false, engine: "clickhouse", state: "running" } }, async (url) => {
+    assert.equal(await dashboardReady(url, "clickhouse"), false);
+  });
+  await withStatusServer({ sync: { available: true, engine: "sqlite", state: "running" } }, async (url) => {
+    assert.equal(await dashboardReady(url, "clickhouse"), false);
+  });
+  await withStatusServer({ sync: { available: true, engine: "clickhouse", state: "running" } }, async (url) => {
+    assert.equal(await dashboardReady(url, "clickhouse"), true);
+  });
+});
 
 test("ClickHouse installer requests the shell payload and rejects HTML", async () => {
   let requestOptions = null;

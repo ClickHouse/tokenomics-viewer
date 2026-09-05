@@ -23,13 +23,14 @@ test("default configuration exposes a validated editable pricing catalog", () =>
   assert.equal(configuration.settings.pricingBasis, "standard");
   assert.equal(configuration.settings.regionalMultiplier, 1);
   assert.equal(configuration.settings.monthlyCostLimitUsd, null);
-  assert.equal(configuration.settings.pricingRevision, "packaged-4");
+  assert.equal(configuration.settings.pricingRevision, "packaged-5");
   assert.deepEqual(configuration.settings.usageProfile, {
     id: "default",
     name: "Work API",
     mode: "api",
   });
   assert.ok(configuration.prices.some((row) => row.provider === "openai" && row.model === "gpt-5.6-luna" && row.variant === "short"));
+  assert.ok(configuration.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra" && row.variant === "short"));
   assert.ok(configuration.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review" && row.variant === "short"));
   const opus5 = configuration.prices.find((row) => row.provider === "anthropic" && row.model === "claude-opus-5");
   const opus48 = configuration.prices.find((row) => row.provider === "anthropic" && row.model === "claude-opus-4-8");
@@ -39,6 +40,58 @@ test("default configuration exposes a validated editable pricing catalog", () =>
     assert.equal(opus5[field], opus48[field], `${field} pricing must match Opus 4.8`);
   }
   assert.deepEqual(normalizeConfiguration(configuration), configuration);
+});
+
+test("default GPT-6 Astra and current GPT-5.6 Sol rows match the official rates", () => {
+  const configuration = defaultConfiguration();
+  const expected = {
+    "gpt-6-astra": {
+      sourceUrl: "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      effectiveFrom: null,
+      short: { input: 10, cacheRead: 1, cacheCreate30m: 12.5, output: 50 },
+      long: { input: 20, cacheRead: 2, cacheCreate30m: 25, output: 75 },
+    },
+    "gpt-5.6-sol": {
+      sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      effectiveFrom: "2026-08-21T00:00:00.000Z",
+      short: { input: 4, cacheRead: 0.4, cacheCreate30m: 5, output: 20 },
+      long: { input: 8, cacheRead: 0.8, cacheCreate30m: 10, output: 30 },
+    },
+  };
+
+  for (const [model, modelExpected] of Object.entries(expected)) {
+    for (const variant of ["short", "long"]) {
+      const row = configuration.prices.find((candidate) => (
+        candidate.provider === "openai" && candidate.model === model && candidate.variant === variant &&
+        candidate.effectiveFrom === modelExpected.effectiveFrom
+      ));
+      assert.ok(row, `${model}/${variant} packaged row is present`);
+      for (const [field, value] of Object.entries(modelExpected[variant])) {
+        assert.equal(row[field], value, `${model}/${variant} ${field} rate`);
+      }
+      assert.equal(row.sourceUrl, modelExpected.sourceUrl);
+    }
+  }
+});
+
+test("default GPT-5.6 Sol rows preserve the August 21 price-cut boundary", () => {
+  const configuration = defaultConfiguration();
+  const historicalUntil = "2026-08-20T23:59:59.999Z";
+  const expected = {
+    short: { input: 5, cacheRead: 0.5, cacheCreate30m: 6.25, output: 30 },
+    long: { input: 10, cacheRead: 1, cacheCreate30m: 12.5, output: 45 },
+  };
+
+  for (const variant of ["short", "long"]) {
+    const row = configuration.prices.find((candidate) => (
+      candidate.provider === "openai" && candidate.model === "gpt-5.6-sol" &&
+      candidate.variant === variant && candidate.effectiveUntil === historicalUntil
+    ));
+    assert.ok(row, `gpt-5.6-sol/${variant} historical packaged row is present`);
+    for (const [field, value] of Object.entries(expected[variant])) {
+      assert.equal(row[field], value, `gpt-5.6-sol/${variant} historical ${field} rate`);
+    }
+  }
 });
 
 test("default GPT-5.6 Luna and Terra rows match the current official standard rates", () => {
@@ -112,11 +165,19 @@ test("default GPT-5.6 Luna and Terra rows preserve the historical pricing bounda
 });
 
 test("legacy packaged catalog recognition rejects even tiny tariff edits", () => {
-  const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
+  const temporalModels = new Set(["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"]);
   const legacy = defaultConfiguration().prices.flatMap((row) => {
+    if (row.model === "gpt-6-astra") return [];
     if (!temporalModels.has(row.model)) return [row];
     if (!row.effectiveUntil) return [];
-    return [{ ...row, effectiveFrom: null, effectiveUntil: null }];
+    return [{
+      ...row,
+      effectiveFrom: null,
+      effectiveUntil: null,
+      sourceUrl: row.model === "gpt-5.6-sol"
+        ? "https://developers.openai.com/api/docs/pricing"
+        : row.sourceUrl,
+    }];
   });
 
   assert.equal(isLegacyPackagedPricingCatalog(legacy), true);
@@ -126,11 +187,41 @@ test("legacy packaged catalog recognition rejects even tiny tariff edits", () =>
   assert.equal(packagedPricingCatalogRevision(legacy), "");
 });
 
+test("packaged-4 catalog remains recognizable for an in-place packaged-5 upgrade", () => {
+  const packaged4 = defaultConfiguration().prices.flatMap((row) => {
+    if (row.model === "gpt-6-astra") return [];
+    if (row.model !== "gpt-5.6-sol") return [row];
+    if (!row.effectiveUntil) return [];
+    return [{
+      ...row,
+      effectiveFrom: null,
+      effectiveUntil: null,
+      sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    }];
+  });
+
+  assert.equal(packagedPricingCatalogRevision(packaged4), "packaged-4");
+  const normalized = normalizeConfiguration({
+    revision: "legacy-packaged-4",
+    settings: { ...defaultConfiguration().settings, pricingRevision: "packaged-4" },
+    prices: packaged4,
+  });
+  assert.equal(normalized.settings.pricingRevision, "packaged-5");
+  assert.ok(normalized.prices.some((row) => row.model === "gpt-6-astra"));
+  assert.equal(normalized.prices.filter((row) => row.model === "gpt-5.6-sol").length, 4);
+  assert.equal(normalized.prices.filter((row) => (
+    row.model === "gpt-5.6-sol" && row.effectiveUntil === "2026-08-20T23:59:59.999Z"
+  )).length, 2);
+  assert.equal(normalized.prices.filter((row) => (
+    row.model === "gpt-5.6-sol" && row.effectiveFrom === "2026-08-21T00:00:00.000Z"
+  )).length, 2);
+});
+
 test("current packaged catalog recognition rejects even tiny tariff edits", () => {
   const current = defaultConfiguration().prices;
 
   assert.equal(isCurrentPackagedPricingCatalog(current), true);
-  assert.equal(packagedPricingCatalogRevision(current), "packaged-4");
+  assert.equal(packagedPricingCatalogRevision(current), "packaged-5");
   current.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short" && row.effectiveFrom).input += Number.EPSILON;
   assert.equal(isCurrentPackagedPricingCatalog(current), false);
   assert.equal(packagedPricingCatalogRevision(current), "");
@@ -148,7 +239,7 @@ test("packaged-2 pricing is upgraded with Opus 5 without replacing persisted row
 
   const normalized = normalizeConfiguration(configuration);
 
-  assert.equal(normalized.settings.pricingRevision, "packaged-4");
+  assert.equal(normalized.settings.pricingRevision, "packaged-5");
   assert.equal(normalized.prices.find((row) => row.id === luna.id).input, 2);
   assert.ok(normalized.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
 });
@@ -165,7 +256,7 @@ test("packaged-1 pricing is upgraded with codex-auto-review without replacing pe
 
   const normalized = normalizeConfiguration(configuration);
 
-  assert.equal(normalized.settings.pricingRevision, "packaged-4");
+  assert.equal(normalized.settings.pricingRevision, "packaged-5");
   assert.equal(normalized.prices.find((row) => row.id === luna.id).input, 2);
   assert.ok(normalized.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review"));
 });
@@ -177,7 +268,7 @@ test("standard edited catalogs get a stable pricing-engine revision and auto-rev
 
   const normalized = normalizeConfiguration(configuration);
 
-  assert.match(normalized.settings.pricingRevision, /^packaged-4:[0-9a-f]{32}$/);
+  assert.match(normalized.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
   assert.equal(normalizeConfiguration(normalized).settings.pricingRevision, normalized.settings.pricingRevision);
   assert.ok(normalized.prices.some((row) => row.provider === "openai" && row.model === "codex-auto-review"));
 
@@ -189,15 +280,15 @@ test("standard edited catalogs get a stable pricing-engine revision and auto-rev
 
 test("managed packaged overlay revisions remain distinct from edited standard catalogs", () => {
   const configuration = defaultConfiguration();
-  const currentManagedRevision = `packaged-4:managed:${"a".repeat(32)}`;
+  const currentManagedRevision = `packaged-5:managed:${"a".repeat(32)}`;
   configuration.settings.pricingRevision = currentManagedRevision;
 
   assert.equal(normalizeConfiguration(configuration).settings.pricingRevision, currentManagedRevision);
 
-  configuration.settings.pricingRevision = `packaged-3:managed:${"b".repeat(32)}`;
+  configuration.settings.pricingRevision = `packaged-4:managed:${"b".repeat(32)}`;
   assert.match(
     normalizeConfiguration(configuration).settings.pricingRevision,
-    /^packaged-4:managed:[0-9a-f]{32}$/,
+    /^packaged-5:managed:[0-9a-f]{32}$/,
   );
 });
 

@@ -8,6 +8,7 @@ const zlib = require("node:zlib");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const { buildReport, createLineProcessor, newReport } = require("../app");
+const { CLAUDE_REQUEST_CHECKPOINT_LIMIT } = require("../lib/ingest/parser");
 const { defaultOptions } = require("./support/fixtures");
 
 test("buildReport scans explicit JSONL path and zip archives", async () => {
@@ -361,6 +362,289 @@ test("Claude speed and service_tier metadata stay separate per request", () => {
     report._usageEvents[1].cost.amount,
     "Anthropic priority service_tier must not imply fast pricing",
   );
+});
+
+test("Claude parser checkpoint keeps bounded recent request deduplication across an append boundary", () => {
+  const sourceLabel = "claude-checkpoint-fixture";
+  const line = (requestId) => JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-08-15T00:00:00.000Z",
+    requestId,
+    cwd: "/tmp/claude-checkpoint",
+    message: {
+      model: "claude-opus-4-8",
+      usage: { input_tokens: 10, output_tokens: 2 },
+    },
+  });
+  const prefix = createLineProcessor(newReport(), defaultOptions(), sourceLabel);
+  prefix(line("req-a"), 1);
+  const checkpoint = JSON.parse(JSON.stringify(prefix.checkpoint()));
+  assert.equal(checkpoint.kind, "claude");
+  assert.equal(checkpoint.deduplication, "clickhouse-event-key");
+  assert.deepEqual(checkpoint.recentRequestIds, ["req-a"]);
+
+  const report = newReport();
+  const resumed = createLineProcessor(report, defaultOptions({ parserCheckpoint: checkpoint }), sourceLabel);
+  resumed(line("req-a"), 2);
+  resumed(line("req-b"), 3);
+
+  assert.equal(report.total.requests, 1);
+  assert.equal(report._usageEvents.length, 1);
+  assert.equal(resumed.checkpoint().recentRequestIds.length, 2);
+
+  const unkeyed = createLineProcessor(newReport(), defaultOptions(), "claude-unkeyed-checkpoint-fixture");
+  unkeyed(line(undefined), 1);
+  assert.deepEqual(unkeyed.checkpoint(), {
+    version: checkpoint.version,
+    kind: "claude",
+    sourceLabel: "claude-unkeyed-checkpoint-fixture",
+    deduplication: "clickhouse-event-key",
+    recentRequestIds: [],
+  });
+  assert.throws(
+    () => createLineProcessor(newReport(), defaultOptions({
+      parserCheckpoint: {
+        ...checkpoint,
+        recentRequestIds: Array.from({ length: CLAUDE_REQUEST_CHECKPOINT_LIMIT + 1 }, (_, index) => `req-${index}`),
+      },
+    }), sourceLabel),
+    /Claude parser checkpoint is not safe to resume/,
+  );
+
+  const long = createLineProcessor(newReport(), defaultOptions(), "claude-long-checkpoint-fixture");
+  for (let index = 0; index < CLAUDE_REQUEST_CHECKPOINT_LIMIT + 10; index += 1) {
+    long(line(`req-${index}`), index + 1);
+  }
+  const bounded = long.checkpoint();
+  assert.equal(bounded.kind, "claude");
+  assert.equal(bounded.recentRequestIds.length, CLAUDE_REQUEST_CHECKPOINT_LIMIT);
+  assert.equal(bounded.recentRequestIds.at(-1), `req-${CLAUDE_REQUEST_CHECKPOINT_LIMIT + 9}`);
+});
+
+test("serialized Codex parser checkpoint resumes cumulative usage and open-turn state", () => {
+  const sourceLabel = "codex-checkpoint-fixture";
+  const options = defaultOptions({ openaiContext: "short" });
+  const prefix = [
+    {
+      type: "session_meta",
+      timestamp: "2026-08-15T00:00:00.000Z",
+      payload: {
+        id: "01a00536-203c-7d72-84fd-e189308e89ce",
+        cwd: "/tmp/checkpoint-project",
+        model_provider: "openai",
+        model: "gpt-5.6-sol",
+      },
+    },
+    {
+      type: "event_msg",
+      timestamp: "2026-08-15T00:00:01.000Z",
+      payload: {
+        type: "thread_settings_applied",
+        thread_settings: { model: "gpt-5.6-sol", service_tier: "priority" },
+      },
+    },
+    {
+      type: "turn_context",
+      timestamp: "2026-08-15T00:00:02.000Z",
+      payload: {
+        turn_id: "01a00536-3000-7000-8000-000000000001",
+        cwd: "/tmp/checkpoint-project",
+        model: "gpt-5.6-sol",
+        effort: "high",
+      },
+    },
+    {
+      type: "event_msg",
+      timestamp: "2026-08-15T00:00:03.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: {
+            input_tokens: 1_000,
+            cached_input_tokens: 400,
+            output_tokens: 100,
+            reasoning_output_tokens: 20,
+          },
+          total_token_usage: {
+            input_tokens: 1_000,
+            cached_input_tokens: 400,
+            output_tokens: 100,
+            reasoning_output_tokens: 20,
+          },
+          model_context_window: 128_000,
+        },
+        rate_limits: {
+          limit_id: "codex",
+          primary: { used_percent: 10, window_minutes: 300, resets_at: 1_800_000_000 },
+        },
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-08-15T00:00:04.000Z",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "abcdefghij" }],
+      },
+    },
+  ];
+  const tail = [{
+    type: "event_msg",
+    timestamp: "2026-08-15T00:00:05.000Z",
+    payload: {
+      type: "token_count",
+      info: {
+        last_token_usage: {
+          input_tokens: 500,
+          cached_input_tokens: 200,
+          output_tokens: 50,
+          reasoning_output_tokens: 10,
+        },
+        total_token_usage: {
+          input_tokens: 1_500,
+          cached_input_tokens: 600,
+          output_tokens: 150,
+          reasoning_output_tokens: 30,
+        },
+        model_context_window: 128_000,
+      },
+      rate_limits: {
+        limit_id: "codex",
+        primary: { used_percent: 15, window_minutes: 300, resets_at: 1_800_000_000 },
+      },
+    },
+  }];
+
+  const uninterruptedReport = newReport();
+  const uninterrupted = createLineProcessor(uninterruptedReport, options, sourceLabel);
+  prefix.forEach((record, index) => uninterrupted(JSON.stringify(record), index + 1));
+  const usageOffset = uninterruptedReport._usageEvents.length;
+  const metricOffset = uninterruptedReport._outputCharMetrics.length;
+  const rateLimitOffset = uninterruptedReport._rateLimitSamples.length;
+  const checkpoint = JSON.parse(JSON.stringify(uninterrupted.checkpoint()));
+  tail.forEach((record, index) => uninterrupted(JSON.stringify(record), prefix.length + index + 1));
+  uninterrupted.finalize();
+
+  const resumedReport = newReport();
+  const resumed = createLineProcessor(
+    resumedReport,
+    defaultOptions({ openaiContext: "short", codexParserCheckpoint: checkpoint }),
+    sourceLabel,
+  );
+  tail.forEach((record, index) => resumed(JSON.stringify(record), prefix.length + index + 1));
+  resumed.finalize();
+
+  assert.deepEqual(resumedReport._usageEvents, uninterruptedReport._usageEvents.slice(usageOffset));
+  assert.deepEqual(resumedReport._outputCharMetrics, uninterruptedReport._outputCharMetrics.slice(metricOffset));
+  assert.deepEqual(resumedReport._rateLimitSamples, uninterruptedReport._rateLimitSamples.slice(rateLimitOffset));
+  assert.equal(resumedReport.total.requests, 1);
+  assert.equal(resumedReport.total.input, 300);
+  assert.equal(resumedReport.total.cacheRead, 200);
+  assert.equal(resumedReport.total.output, 50);
+  assert.equal(resumedReport.total.reasoningOutput, 10);
+  assert.equal(resumedReport._usageEvents[0].serviceTier, "priority");
+  assert.equal(resumedReport._usageEvents[0].effort, "high");
+  assert.equal(resumedReport._outputCharMetrics[0].visibleOutputChars, 10);
+  assert.equal(resumedReport._outputCharMetrics[0].visibleOutputTokens, 40);
+  assert.equal(resumedReport._rateLimitSamples[0].sequence, 1);
+});
+
+test("Codex parser checkpoint preserves duplicate suppression across the byte boundary", () => {
+  const sourceLabel = "codex-checkpoint-duplicate-fixture";
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), sourceLabel);
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-08-15T00:00:00.000Z",
+    payload: {
+      id: "01a00536-203c-7d72-84fd-e189308e89ce",
+      cwd: "/tmp/checkpoint-project",
+    },
+  }), 1);
+  processLine(JSON.stringify({
+    type: "turn_context",
+    timestamp: "2026-08-15T00:00:01.000Z",
+    payload: {
+      turn_id: "01a00536-3000-7000-8000-000000000002",
+      cwd: "/tmp/checkpoint-project",
+      model: "gpt-5-codex",
+    },
+  }), 2);
+  const usageSnapshot = {
+    type: "event_msg",
+    timestamp: "2026-08-15T00:00:02.000Z",
+    payload: {
+      type: "token_count",
+      info: {
+        last_token_usage: {
+          input_tokens: 100,
+          cached_input_tokens: 20,
+          output_tokens: 10,
+        },
+      },
+    },
+  };
+  processLine(JSON.stringify(usageSnapshot), 3);
+  const checkpoint = JSON.parse(JSON.stringify(processLine.checkpoint()));
+
+  const resumedReport = newReport();
+  const resumed = createLineProcessor(
+    resumedReport,
+    defaultOptions({ codexParserCheckpoint: checkpoint }),
+    sourceLabel,
+  );
+  resumed(JSON.stringify({ ...usageSnapshot, timestamp: "2026-08-15T00:00:03.000Z" }), 4);
+
+  assert.equal(resumedReport.sources.tokenCountSnapshots, 1);
+  assert.equal(resumedReport.sources.skippedTokenCountSnapshots, 1);
+  assert.equal(resumedReport.total.requests, 0);
+  assert.equal(resumedReport._usageEvents.length, 0);
+});
+
+test("Codex parser checkpoint fails closed for forks and incompatible identities", () => {
+  const sourceLabel = "codex-checkpoint-safety-fixture";
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), sourceLabel);
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-08-15T00:00:00.000Z",
+    payload: {
+      id: "01a00536-203c-7d72-84fd-e189308e89ce",
+      cwd: "/tmp/checkpoint-project",
+    },
+  }), 1);
+  const checkpoint = processLine.checkpoint();
+  assert.ok(checkpoint);
+
+  assert.throws(
+    () => createLineProcessor(
+      newReport(),
+      defaultOptions({ codexParserCheckpoint: { ...checkpoint, version: checkpoint.version + 1 } }),
+      sourceLabel,
+    ),
+    /Unsupported Codex parser checkpoint version/,
+  );
+  assert.throws(
+    () => createLineProcessor(
+      newReport(),
+      defaultOptions({ codexParserCheckpoint: checkpoint }),
+      `${sourceLabel}-other`,
+    ),
+    /Codex parser checkpoint source mismatch/,
+  );
+
+  const forked = createLineProcessor(newReport(), defaultOptions(), "codex-checkpoint-fork-fixture");
+  forked(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-08-15T00:00:00.000Z",
+    payload: {
+      id: "01a00536-203c-7d72-84fd-e189308e89cf",
+      forked_from_id: "01a00536-203c-7d72-84fd-e189308e89ce",
+      cwd: "/tmp/checkpoint-project",
+    },
+  }), 1);
+  assert.equal(forked.checkpoint(), null);
 });
 
 test("omp malformed JSON is counted in lenient mode and rejected in strict mode", async () => {
