@@ -3,8 +3,13 @@ import SwiftUI
 
 @MainActor
 public final class SettingsWindowController: NSWindowController {
-    public init(preferences: PreferencesStore) {
-        let contentSize = NSSize(width: 460, height: 440)
+    static let defaultContentSize = NSSize(width: 460, height: 440)
+
+    public init(
+        preferences: PreferencesStore,
+        loginItemController: LoginItemController = LoginItemController()
+    ) {
+        let contentSize = Self.defaultContentSize
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -12,7 +17,10 @@ public final class SettingsWindowController: NSWindowController {
             defer: false
         )
         let hostingController = NSHostingController(
-            rootView: SettingsView(preferences: preferences) { [weak window] in
+            rootView: SettingsView(
+                preferences: preferences,
+                loginItemController: loginItemController
+            ) { [weak window] in
                 window?.close()
             }
         )

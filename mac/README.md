@@ -25,6 +25,28 @@ cd mac
 swift run TokenomicsMenubar
 ```
 
+`swift run` is useful for UI development, but launch-at-login requires a signed
+application bundle. Build an ad-hoc signed development bundle and run all Swift
+tests with one command from the repository root:
+
+```sh
+./mac/build-app.sh
+open mac/dist/Tokenomics.app
+```
+
+The app's **Settings → Startup** section uses macOS `SMAppService.mainApp` and
+stays in sync with **System Settings → General → Login Items**. If macOS requires
+approval, the settings view links to that system panel.
+
+For a release build, provide a Developer ID identity. The script enables the
+hardened runtime and timestamp for non-ad-hoc signatures; notarization remains
+a separate release step.
+
+```sh
+TOKENOMICS_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
+  ./mac/build-app.sh
+```
+
 Run the Swift checks from `mac/`:
 
 ```sh

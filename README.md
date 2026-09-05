@@ -152,6 +152,7 @@ The local defaults are:
 ### Check and Control the Local Server
 
 ```bash
+cd "${TOKENOMICS_DATA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}/tokenomics-viewer"
 chctl --version
 chctl local server list
 curl -fsS http://127.0.0.1:8123/ping
@@ -161,14 +162,16 @@ chctl local client --name tokenomics --query "SELECT version()"
 Start or stop the named server:
 
 ```bash
+cd "${TOKENOMICS_DATA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}/tokenomics-viewer"
 chctl local server start --name tokenomics --http-port 8123 --tcp-port 9000
 chctl local server stop tokenomics
 ```
 
 `clickhousectl` stores local server state under `.clickhouse/` in the directory
-where it is run. Run control commands from the same directory where you started
-`tokenomics-launch`. If `chctl local server list` is unexpectedly empty, check
-your current directory first.
+where it is run. `tokenomics-launch` always invokes it from Tokenomics' persistent
+data directory, independent of the shell, Finder, or Login Items working directory.
+Run manual control commands from that same data directory. If
+`chctl local server list` is unexpectedly empty, check your current directory first.
 
 To install `clickhousectl` manually:
 
@@ -500,14 +503,15 @@ prints a shell-specific suggestion but does not modify the file itself.
 ### ClickHouse Is Not Reachable
 
 ```bash
+cd "${TOKENOMICS_DATA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}/tokenomics-viewer"
 chctl local server list
 curl -fsS http://127.0.0.1:8123/ping
 ```
 
-Run both commands from the launch directory because local `clickhousectl`
-servers are directory-scoped. If port `8123` belongs to another service, either
-stop that service or run Tokenomics directly against another ClickHouse HTTP
-endpoint with `--clickhouse-url`.
+Run both commands from the Tokenomics data directory because local
+`clickhousectl` servers are directory-scoped. If port `8123` belongs to another
+service, either stop that service or run Tokenomics directly against another
+ClickHouse HTTP endpoint with `--clickhouse-url`.
 
 ### The Dashboard Port Is Busy
 
