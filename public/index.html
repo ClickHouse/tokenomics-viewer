@@ -439,10 +439,16 @@
         const context = Number.isFinite(row.contextTokens)
           ? ' · context ' + formatTokenCount(row.contextTokens) + (Number.isFinite(row.contextWindowTokens) ? '/' + formatTokenCount(row.contextWindowTokens) : '')
           : '';
+        const native = [];
+        if (Number(row.requestCount || 0) > 0) native.push(formatTokenCount(row.requestCount) + ' recorded request' + (Number(row.requestCount) === 1 ? '' : 's'));
+        if (Number(row.premiumRequests || 0) > 0) native.push(formatTokenCount(row.premiumRequests) + ' premium request' + (Number(row.premiumRequests) === 1 ? '' : 's'));
+        if (Number(row.aiUnits || 0) > 0) native.push(Number(row.aiUnits).toLocaleString([], { maximumFractionDigits: 6 }) + ' AIU');
+        if (Number(row.reportedCopilotCredits || 0) > 0) native.push(Number(row.reportedCopilotCredits).toLocaleString([], { maximumFractionDigits: 6 }) + ' reported credits');
+        const nativeLine = native.length ? '<div class="observed-harness-card-meta">' + esc(native.join(' · ')) + '</div>' : '';
         return '<article class="observed-harness-card"><div class="observed-harness-card-head"><span class="observed-harness-card-label">' +
           esc(row.agent) + ' · ' + esc(row.provider) + '</span><strong>' + esc(String(sessions)) + ' session' + (sessions === 1 ? '' : 's') + '</strong></div>' +
           '<div class="observed-harness-card-meta">' + esc(model + ' · ' + project) + '</div>' +
-          '<div class="observed-harness-card-meta">' + esc(timestamp + context + ' · usage unavailable') + '</div></article>';
+          nativeLine + '<div class="observed-harness-card-meta">' + esc(timestamp + context + ' · exact usage unavailable') + '</div></article>';
       }).join('');
     }
 

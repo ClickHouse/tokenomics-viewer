@@ -1,9 +1,10 @@
 {
   "name": "tokenomics-viewer",
   "version": "0.0.1",
-  "description": "Local token, cost, and harness analytics for Codex, Claude Code, omp, Pi, Gemini, Qwen, OpenCode, Cursor, and Grok Build",
+  "description": "Local token, cost, and harness analytics for Codex, Claude Code, omp, Pi, Gemini, Qwen, OpenCode, Cursor, Grok Build, and GitHub Copilot",
   "keywords": [
     "codex",
+    "copilot",
     "claude",
     "code",
     "oh-my-pi",

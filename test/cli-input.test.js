@@ -100,7 +100,7 @@ test("main writes final JSON report with per-session metrics", async () => {
 
 test("parseArgs rejects invalid values across the supported validation matrix", () => {
   const invalidCases = [
-    [["--source", "invalid"], "--source must be all, claude, codex, omp, pi, gemini, qwen, opencode, cursor, or grok"],
+    [["--source", "invalid"], "--source must be all, claude, codex, omp, pi, gemini, qwen, opencode, cursor, grok, or copilot"],
     [["--openai-context", "invalid"], "--openai-context must be auto, short, or long"],
     [["--format", "xml"], "--format must be text or json"],
     [["--db-engine", "invalid"], "--db-engine must be sqlite or clickhouse"],
