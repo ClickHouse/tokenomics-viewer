@@ -4,11 +4,21 @@ public struct SyncProbe: Equatable, Sendable {
     public var state: SyncState
     public var available: Bool
     public var error: String?
+    public var runtimeId: String?
+    public var reportReady: Bool
 
-    public init(state: SyncState, available: Bool = true, error: String? = nil) {
+    public init(
+        state: SyncState,
+        available: Bool = true,
+        error: String? = nil,
+        runtimeId: String? = nil,
+        reportReady: Bool = true
+    ) {
         self.state = state
         self.available = available
         self.error = error
+        self.runtimeId = runtimeId
+        self.reportReady = reportReady
     }
 }
 
@@ -37,7 +47,13 @@ public final class URLSessionTokenomicsClient: TokenomicsHTTPClient, @unchecked 
             let envelope = try JSONDecoder().decode(SyncEnvelope.self, from: data)
             guard let state = envelope.sync.state else { throw EndpointError.notTokenomics }
             guard let decoded = SyncState.parse(state) else { throw EndpointError.notTokenomics }
-            return SyncProbe(state: decoded, available: envelope.sync.available ?? true, error: envelope.sync.error)
+            return SyncProbe(
+                state: decoded,
+                available: envelope.sync.available ?? true,
+                error: envelope.sync.error,
+                runtimeId: envelope.sync.runtimeId,
+                reportReady: envelope.sync.reportReady ?? true
+            )
         } catch let error as EndpointError {
             throw error
         } catch {
@@ -108,4 +124,6 @@ private struct SyncBody: Decodable {
     let state: String?
     var available: Bool?
     var error: String?
+    var runtimeId: String?
+    var reportReady: Bool?
 }

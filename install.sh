@@ -133,18 +133,25 @@ copy_application() {
 write_wrapper() {
   wrapper=$1
   entrypoint=$2
+  wrapper_releases_root=${3:-}
   node_q=$(shell_quote "$NODE_BIN")
   entry_q=$(shell_quote "$INSTALL_ROOT/current/$entrypoint")
   temporary="$wrapper.$$"
   {
     printf '%s\n' '#!/bin/sh'
-    printf 'exec %s %s "$@"\n' "$node_q" "$entry_q"
+    if [ "$entrypoint" = "launcher.js" ] && [ -n "$wrapper_releases_root" ]; then
+      releases_q=$(shell_quote "$wrapper_releases_root")
+      printf 'exec %s %s --legacy-releases-root %s "$@"\n' "$node_q" "$entry_q" "$releases_q"
+    else
+      printf 'exec %s %s "$@"\n' "$node_q" "$entry_q"
+    fi
   } > "$temporary"
   chmod 755 "$temporary"
   mv -f "$temporary" "$wrapper"
 }
 
 write_macos_launcher_configuration() {
+  runtime_id=$1
   configuration_path=${TOKENOMICS_MACOS_LAUNCHER_CONFIG:-}
   if [ -z "$configuration_path" ]; then
     [ "$(uname -s)" = "Darwin" ] || return 0
@@ -154,16 +161,16 @@ write_macos_launcher_configuration() {
   "$NODE_BIN" -e '
     const fs = require("node:fs");
     const path = require("node:path");
-    const [configurationPath, command] = process.argv.slice(1);
+    const [configurationPath, command, runtimeId] = process.argv.slice(1);
     const temporary = `${configurationPath}.${process.pid}.tmp`;
     fs.mkdirSync(path.dirname(configurationPath), { recursive: true });
     try {
-      fs.writeFileSync(temporary, `${JSON.stringify({ schema: 1, command, args: [] }, null, 2)}\n`, { mode: 0o600 });
+      fs.writeFileSync(temporary, `${JSON.stringify({ schema: 1, command, args: [], runtimeId }, null, 2)}\n`, { mode: 0o600 });
       fs.renameSync(temporary, configurationPath);
     } finally {
       fs.rmSync(temporary, { force: true });
     }
-  ' "$configuration_path" "$BIN_DIR/tokenomics-launch"
+  ' "$configuration_path" "$BIN_DIR/tokenomics-launch" "$runtime_id"
 }
 
 require_command curl
@@ -213,6 +220,8 @@ else
 fi
 
 "$NODE_BIN" "$staged_release/launcher.js" --help >/dev/null
+runtime_id=$("$NODE_BIN" -e 'process.stdout.write(require(process.argv[1]).RUNTIME_ID)' \
+  "$staged_release/lib/core/runtime-identity.js")
 mv "$staged_release" "$release_dir"
 next_link="$INSTALL_ROOT/.current.$$"
 ln -s "$release_dir" "$next_link"
@@ -221,8 +230,8 @@ ln -s "$release_dir" "$next_link"
 
 write_wrapper "$BIN_DIR/tokenomics" app.js
 write_wrapper "$BIN_DIR/tokenomics-viewer" app.js
-write_wrapper "$BIN_DIR/tokenomics-launch" launcher.js
-write_macos_launcher_configuration
+write_wrapper "$BIN_DIR/tokenomics-launch" launcher.js "$RELEASES_DIR"
+write_macos_launcher_configuration "$runtime_id"
 
 say "Tokenomics Viewer installed in $INSTALL_ROOT"
 say "Commands installed in $BIN_DIR"

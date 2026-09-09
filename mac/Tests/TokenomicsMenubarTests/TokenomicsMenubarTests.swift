@@ -785,6 +785,57 @@ final class CoordinatorSyncTests: XCTestCase {
         coordinator.stop()
     }
 
+    func testInstalledRuntimeMismatchStartsLauncherAndDoesNotReuseOldSummary() async throws {
+        let suiteName = "TokenomicsMenubarTests.runtime-transition"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        let client = RuntimeTransitionClient()
+        let launcher = RuntimeTransitionLauncher(client: client)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in
+                PersistedLauncherConfiguration(command: "/bin/sh", runtimeId: "new-runtime")
+            }
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(launcher.startCount, 1)
+        XCTAssertEqual(client.summaryFetchCount, 1)
+        XCTAssertEqual(coordinator.payload?.currentMonth?.amountUSD, 1)
+        XCTAssertEqual(coordinator.state, .connected)
+    }
+
+    func testInitialInvalidatedReportWaitsForPublicationWithoutStartingAnotherSync() async throws {
+        let suiteName = "TokenomicsMenubarTests.report-publication"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        let client = PublishingClient()
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: FailingLauncher(),
+            launcherConfigurationResolver: { _ in
+                PersistedLauncherConfiguration(command: "/bin/sh", runtimeId: "current-runtime")
+            }
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(client.syncRequestCount, 0)
+        XCTAssertEqual(client.summaryFetchCount, 1)
+        XCTAssertEqual(coordinator.payload?.currentMonth?.amountUSD, 2)
+        XCTAssertEqual(coordinator.state, .connected)
+    }
+
     func testWrongServiceIsNotReplacedByTheLauncher() async throws {
         let suiteName = "TokenomicsMenubarTests.wrong-service"
         let suite = UserDefaults(suiteName: suiteName)!
@@ -1077,6 +1128,61 @@ private final class StartableClient: TokenomicsHTTPClient, @unchecked Sendable {
     }
 
     func triggerSync(at endpoint: Endpoint) async throws {}
+}
+
+private final class RuntimeTransitionClient: TokenomicsHTTPClient, @unchecked Sendable {
+    var runtimeId = "old-runtime"
+    private(set) var summaryFetchCount = 0
+
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        SyncProbe(state: .succeeded, runtimeId: runtimeId)
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        summaryFetchCount += 1
+        return SummaryResponse(
+            currentMonth: UsagePeriod(amountUSD: runtimeId == "new-runtime" ? 1 : 999),
+            daily: []
+        )
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {}
+}
+
+@MainActor
+private final class RuntimeTransitionLauncher: TokenomicsLauncher {
+    private let client: RuntimeTransitionClient
+    private(set) var startCount = 0
+
+    init(client: RuntimeTransitionClient) { self.client = client }
+
+    func start(executablePath: String, port: Int, timeout: Duration) async throws -> any TokenomicsProcessHandle {
+        startCount += 1
+        client.runtimeId = "new-runtime"
+        return RecordingProcess()
+    }
+}
+
+private final class PublishingClient: TokenomicsHTTPClient, @unchecked Sendable {
+    private var probeCount = 0
+    private(set) var syncRequestCount = 0
+    private(set) var summaryFetchCount = 0
+
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        probeCount += 1
+        return SyncProbe(
+            state: probeCount >= 3 ? .succeeded : .running,
+            runtimeId: "current-runtime",
+            reportReady: probeCount >= 3
+        )
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        summaryFetchCount += 1
+        return SummaryResponse(currentMonth: UsagePeriod(amountUSD: 2), daily: [])
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws { syncRequestCount += 1 }
 }
 
 private final class UnavailableClient: TokenomicsHTTPClient, @unchecked Sendable {

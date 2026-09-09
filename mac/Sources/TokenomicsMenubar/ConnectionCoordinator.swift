@@ -196,7 +196,13 @@ public final class ConnectionCoordinator: ObservableObject {
 
             var syncSnapshot: SyncProbe?
             var syncFailureMessage: String?
-            if triggerSync && !discovery.launched {
+            let initialSync = try await client.probeSync(at: selected)
+            if !initialSync.reportReady {
+                payload = nil
+                lastGoodPayload = nil
+                state = .syncing(lastGood: false)
+                syncSnapshot = try await waitForReport(at: selected, generation: generation)
+            } else if triggerSync && !discovery.launched {
                 state = .syncing(lastGood: lastGoodPayload != nil)
                 do {
                     syncSnapshot = try await syncAndWait(at: selected, generation: generation)
@@ -245,11 +251,18 @@ public final class ConnectionCoordinator: ObservableObject {
         guard let candidate = ordered.first else {
             throw EndpointError.network("The configured Tokenomics port is invalid.")
         }
+        let launchConfiguration = launcherConfiguration()
 
         guard isCurrent(generation) else { throw CancellationError() }
         do {
-            _ = try await client.probeSync(at: candidate)
-            return (candidate, false)
+            let probe = try await client.probeSync(at: candidate)
+            if launchConfiguration?.runtimeId == nil || probe.runtimeId == launchConfiguration?.runtimeId {
+                return (candidate, false)
+            }
+            // The endpoint belongs to Tokenomics, but not to the installed
+            // release. Never carry its report across the replacement boundary.
+            payload = nil
+            lastGoodPayload = nil
         } catch EndpointError.notTokenomics {
             throw EndpointError.notTokenomics
         } catch EndpointError.httpStatus {
@@ -270,7 +283,7 @@ public final class ConnectionCoordinator: ObservableObject {
             self.launcherProcess = nil
         }
 
-        guard let launchConfiguration = launcherConfiguration() else {
+        guard let launchConfiguration else {
             throw EndpointError.network("Tokenomics is unavailable on port \(candidate.port).")
         }
 
@@ -307,9 +320,11 @@ public final class ConnectionCoordinator: ObservableObject {
                     throw LauncherError.exitedBeforeService(1, process.output)
                 }
                 do {
-                    _ = try await client.probeSync(at: candidate)
-                    launcherOutput = process.output
-                    return (candidate, true)
+                    let probe = try await client.probeSync(at: candidate)
+                    if launchConfiguration.runtimeId == nil || probe.runtimeId == launchConfiguration.runtimeId {
+                        launcherOutput = process.output
+                        return (candidate, true)
+                    }
                 } catch EndpointError.notTokenomics, EndpointError.decoding, EndpointError.httpStatus {
                     // Keep waiting while the configured process binds its port.
                 } catch is CancellationError {
@@ -364,6 +379,20 @@ public final class ConnectionCoordinator: ObservableObject {
             case .running:
                 try await Task.sleep(for: .milliseconds(500))
             }
+        }
+        throw EndpointError.timeout
+    }
+
+    private func waitForReport(at endpoint: Endpoint, generation: Int) async throws -> SyncProbe {
+        let deadline = Date().addingTimeInterval(30 * 60)
+        while Date() < deadline {
+            guard isCurrent(generation) else { throw CancellationError() }
+            let status = try await client.probeSync(at: endpoint)
+            if status.reportReady { return status }
+            if status.state == .failed {
+                throw EndpointError.network(status.error ?? "The backend refresh failed")
+            }
+            try await Task.sleep(for: .milliseconds(500))
         }
         throw EndpointError.timeout
     }

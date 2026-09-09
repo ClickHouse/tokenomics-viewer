@@ -231,11 +231,18 @@ public struct PersistedLauncherConfiguration: Codable, Equatable, Sendable {
     public var schema: Int
     public var command: String
     public var args: [String]
+    public var runtimeId: String?
 
-    public init(schema: Int = LauncherConfigurationSchema.current, command: String, args: [String] = []) {
+    public init(
+        schema: Int = LauncherConfigurationSchema.current,
+        command: String,
+        args: [String] = [],
+        runtimeId: String? = nil
+    ) {
         self.schema = schema
         self.command = command
         self.args = args
+        self.runtimeId = runtimeId
     }
 }
 

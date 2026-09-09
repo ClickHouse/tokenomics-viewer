@@ -164,12 +164,18 @@
     body[data-dashboard-mode="settings"] main > :not(#pricing-settings) { display:none !important; }
     body[data-dashboard-mode="settings"] #pricing-settings { display:block; }
     body[data-dashboard-mode="settings"] .section-nav { display:none; }
+    #report-pending { display:grid; min-height:240px; place-content:center; text-align:center; }
+    #report-pending h2 { margin-bottom:6px; }
+    body[data-report-ready="true"] #report-pending { display:none; }
+    body[data-report-ready="false"] main > :not(#report-pending) { display:none !important; }
+    body[data-report-ready="false"] .section-nav,
+    body[data-report-ready="false"] #dashboard-mode-controls { display:none; }
     @media (max-width: 1180px) { .cards { grid-template-columns:repeat(3, minmax(0, 1fr)); } .card:nth-child(3) { border-right:0; } .card:nth-child(n+4) { border-top:1px solid var(--line); } }
     @media (max-width: 760px) { .cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } .card, .card:nth-child(3) { border-right:1px solid var(--line); border-top:1px solid var(--line); } .card:nth-child(-n+2) { border-top:0; } .card:nth-child(2n) { border-right:0; } .card:last-child { grid-column:1 / -1; border-right:0; } .service-mode-grid { grid-template-columns:1fr; } .panel-head { display:grid; } .chart-head-meta { justify-items:start; } .hover-legend { justify-items:start; } .legend-line { justify-content:flex-start; } .date-controls { justify-content:flex-start; } .recommendation-list { grid-template-columns:1fr; } .recommendation-item:nth-child(odd) { border-right:0; } .settings-grid { grid-template-columns:1fr; } .settings-actions { justify-content:flex-start; } .pricing-table th:nth-child(2), .pricing-table td:nth-child(2) { position:static; box-shadow:none; } }
     @media (max-width: 560px) { .brand-row { align-items:flex-start; flex-wrap:wrap; } .brand-group { align-items:flex-start; flex-direction:column; gap:3px; } .header-actions { width:100%; justify-content:space-between; } .sync-state { max-width:240px; } .section-nav { gap:18px; } main { padding:12px; } section { scroll-margin-top:170px; } .cards { grid-template-columns:1fr; } .card, .card:nth-child(3), .card:nth-child(2n) { border-right:0; border-top:1px solid var(--line); } .card:first-child { border-top:0; } .card:last-child { grid-column:auto; } .observed-harness-grid { grid-template-columns:1fr; } .token-card .value { white-space:normal; } .chart-wrap, .project-chart-wrap { min-height:330px; } .mix-canvas { height:330px; } .date-control-group { flex-wrap:wrap; } .chart-help::after { position:fixed; inset:auto 12px 12px 12px; width:auto; transform:translateY(3px); } }
   </style>
 </head>
-<body data-dashboard-mode="overview">
+<body data-dashboard-mode="overview" data-report-ready="false">
   <header class="app-header" id="app-header">
     <div class="brand-row">
       <div class="brand-group">
@@ -195,6 +201,9 @@
     </nav>
   </header>
   <main>
+    <section id="report-pending" role="status" aria-live="polite">
+      <div><h2 id="report-pending-title">Updating usage data…</h2><div class="muted" id="report-pending-detail">Tokenomics is applying a one-time data refresh.</div></div>
+    </section>
     <section class="kpi-band" id="overview-section"><div class="cards" id="cards"></div></section>
     <section id="service-mode-section" class="service-mode-panel">
       <div class="panel-head"><div class="panel-title-stack"><h2>Service Mode</h2><div class="muted">Explicit per-request mode telemetry; unknown is not guessed from the model name.</div></div></div>
@@ -1859,6 +1868,7 @@
     let syncPollGeneration = 0;
     let syncEventSource = null;
     let syncAvailable = false;
+    let reportRevealPromise = null;
 
     async function fetchTimeline({ project, days, from, to, fromAt, toAt } = {}) {
       const params = new URLSearchParams();
@@ -1935,6 +1945,16 @@
       const response = await fetch('/api/summary', { cache: 'no-store' });
       if (!response.ok) throw new Error('Summary request failed: HTTP ' + response.status);
       render(await response.json());
+      document.body.dataset.reportReady = 'true';
+    }
+
+    async function revealReadyReport(sync) {
+      if (sync?.reportReady !== true || document.body.dataset.reportReady === 'true') return false;
+      if (!reportRevealPromise) {
+        reportRevealPromise = loadSummary().finally(() => { reportRevealPromise = null; });
+      }
+      await reportRevealPromise;
+      return true;
     }
 
     function renderSyncStatus(sync) {
@@ -1944,6 +1964,11 @@
       const state = sync?.state || 'idle';
       if (typeof sync?.available === 'boolean') syncAvailable = sync.available;
       const running = state === 'running';
+      if (sync?.reportReady === false) document.body.dataset.reportReady = 'false';
+      if (running && sync?.reportReady === false) {
+        document.getElementById('report-pending-title').textContent = 'Updating usage data…';
+        document.getElementById('report-pending-detail').textContent = 'Tokenomics is applying a one-time data refresh.';
+      }
       button.disabled = running || !syncAvailable;
       button.textContent = running ? 'Syncing...' : 'Sync';
       dot.classList.toggle('running', running);
@@ -1966,6 +1991,10 @@
       } else if (state === 'failed') {
         updated.textContent = 'Sync failed';
         updated.title = sync.error || 'Unknown sync error';
+        if (sync?.reportReady === false) {
+          document.getElementById('report-pending-title').textContent = 'Usage data could not be updated';
+          document.getElementById('report-pending-detail').textContent = sync.error || 'Retry the update to continue.';
+        }
       } else if (state === 'succeeded') {
         const result = sync.result || {};
         updated.textContent = 'Synced ' + (result.changedSources || 0) + ' changed · ' +
@@ -2142,8 +2171,9 @@
           const sync = await fetchSyncStatus();
           failures = 0;
           renderSyncStatus(sync);
+          const revealed = await revealReadyReport(sync);
           if (sync.state !== 'running') {
-            if (sync.state === 'succeeded') {
+            if (sync.state === 'succeeded' && !revealed) {
               await loadSummary();
               renderSyncStatus(sync);
             }
@@ -2185,9 +2215,10 @@
         try {
           const sync = JSON.parse(event.data).sync;
           renderSyncStatus(sync);
+          const revealed = await revealReadyReport(sync);
           if (sync.state !== 'running') {
             closeSyncEventSource();
-            if (sync.state === 'succeeded') {
+            if (sync.state === 'succeeded' && !revealed) {
               await loadSummary();
               renderSyncStatus(sync);
             }
@@ -2227,8 +2258,13 @@
     }
 
     async function initializeDashboard() {
-      const [, sync] = await Promise.all([loadSummary(), fetchSyncStatus(), loadConfigurationEditor()]);
+      const [sync] = await Promise.all([fetchSyncStatus(), loadConfigurationEditor()]);
       renderSyncStatus(sync);
+      if (sync.reportReady === false) {
+        if (sync.state === 'running') watchSyncStatus();
+        return;
+      }
+      await loadSummary();
       if (sync.state === 'running') watchSyncStatus();
     }
 

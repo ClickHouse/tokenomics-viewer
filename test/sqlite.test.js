@@ -411,6 +411,7 @@ test("SQLite reimports a missing named derivation exactly once", async () => {
     onSyncProgress: (event) => progressEvents.push(event),
   }));
   assert.equal(progressEvents.at(-1).changedSources, 1);
+  assert.equal(progressEvents.find((event) => event.phase === "processing").reportInvalidated, true);
 
   const recovered = new DatabaseSync(db);
   try {
@@ -426,6 +427,7 @@ test("SQLite reimports a missing named derivation exactly once", async () => {
     onSyncProgress: (event) => progressEvents.push(event),
   }));
   assert.equal(progressEvents.at(-1).changedSources, 0);
+  assert.equal(progressEvents.find((event) => event.phase === "processing").reportInvalidated, false);
 });
 
 test("SQLite replaces a Codex source when archiving moves the same session", async () => {
