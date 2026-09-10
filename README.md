@@ -49,6 +49,11 @@ without launching the application:
 TOKENOMICS_NO_LAUNCH=1 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/skuznetsov/tokenomics-viewer/main/install.sh)"
 ```
 
+Updates replace the previously installed local runtime before synchronization.
+Ordinary incremental synchronization keeps the last committed report visible;
+when an analytics-format migration requires a one-time replay, Tokenomics hides
+the affected totals until the corrected generation is published atomically.
+
 If `~/.local/bin` is not on `PATH`, the installer prints the exact `export`
 command to use. It does not edit shell startup files.
 

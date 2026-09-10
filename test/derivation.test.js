@@ -4,6 +4,8 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   ANALYTICS_DERIVATION_VERSION,
+  CODEX_USAGE_DERIVATION_VERSION,
+  sameAnalyticsDerivation,
   sameSourceFingerprint,
   sourceFingerprint,
 } = require("../lib/core/derivation");
@@ -25,10 +27,27 @@ test("source fingerprints use deterministic key ordering", () => {
   assert.equal(first, second);
   assert.equal(first, [
     `analyticsDerivationVersion=${ANALYTICS_DERIVATION_VERSION}`,
+    `codexUsageDerivationVersion=${CODEX_USAGE_DERIVATION_VERSION}`,
     "kind=jsonl",
     "mtimeMs=42",
     "size=128",
   ].join("|"));
+});
+
+test("Codex usage derivation invalidates a colliding global analytics version", () => {
+  const current = sourceFingerprint(sourceParts);
+  const previous = current
+    .split("|")
+    .filter((part) => !part.startsWith("codexUsageDerivationVersion="))
+    .join("|");
+
+  assert.equal(
+    previous.includes(`analyticsDerivationVersion=${ANALYTICS_DERIVATION_VERSION}`),
+    true,
+  );
+  assert.equal(sameAnalyticsDerivation(previous, current), false);
+  assert.equal(sameSourceFingerprint(previous, current), false);
+  assert.equal(sameAnalyticsDerivation(current, current), true);
 });
 
 test("source fingerprints invalidate when the analytics derivation changes", () => {

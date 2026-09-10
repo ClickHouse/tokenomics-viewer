@@ -5,6 +5,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const Path = require("node:path");
 const test = require("node:test");
+const { once } = require("node:events");
+const { RUNTIME_ID } = require("../lib/core/runtime-identity");
 const { newReport, startWebServer, syncDatabase } = require("../app");
 const {
   MAX_CONFIGURATION_BODY_BYTES,
@@ -151,8 +153,9 @@ test("webserver mode listens before its automatic sync completes", async () => {
       return { ...newReport(), marker: "database" };
     },
     resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-startup-sync.sqlite"),
-    syncDatabase: async () => {
+    syncDatabase: async (options) => {
       syncCalls += 1;
+      options.onSyncProgress({ phase: "processing", reportInvalidated: true });
       await syncGate;
       return { ...newReport(), marker: "current" };
     },
@@ -170,13 +173,63 @@ test("webserver mode listens before its automatic sync completes", async () => {
     const summary = await summaryResponse.json();
     assert.equal(syncCalls, 1);
     assert.equal(status.sync.state, "running");
-    assert.equal(summaryResponse.status, 200);
-    assert.equal(summary.contractVersion, 1);
+    assert.equal(status.sync.reportReady, false);
+    assert.equal(status.sync.runtimeId, RUNTIME_ID);
+    assert.equal(summaryResponse.status, 503);
+    assert.deepEqual(summary, { error: "usage report is being refreshed" });
     assert.equal(reportBuilds, 0);
+    const stopResponse = await fetch(`${base}/api/runtime/stop`, {
+      method: "POST",
+      headers: { "x-tokenomics-action": "replace-runtime" },
+    });
+    assert.equal(stopResponse.status, 409);
 
     releaseSync();
     await server.syncController.waitForIdle();
-    assert.equal((await fetch(`${base}/api/sync`).then((response) => response.json())).sync.state, "succeeded");
+    const completed = (await fetch(`${base}/api/sync`).then((response) => response.json())).sync;
+    assert.equal(completed.state, "succeeded");
+    assert.equal(completed.reportReady, true);
+    assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "current");
+  } finally {
+    releaseSync();
+    await server.syncController.waitForIdle();
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("webserver keeps the last committed report visible during an ordinary startup sync", async () => {
+  let releaseSync;
+  let announcePlan;
+  const syncGate = new Promise((resolve) => { releaseSync = resolve; });
+  const planReady = new Promise((resolve) => { announcePlan = resolve; });
+  const web = createWebServer({
+    buildReportFromSelectedDatabase: async () => ({ ...newReport(), marker: "last-good" }),
+    resolveDbPath: () => Path.join(os.tmpdir(), "tokenomics-startup-incremental.sqlite"),
+    syncDatabase: async (options) => {
+      options.onSyncProgress({ phase: "processing", reportInvalidated: false });
+      announcePlan();
+      await syncGate;
+      return { ...newReport(), marker: "current" };
+    },
+  });
+  const server = await web.startWebServer(defaultOptions({
+    webserver: true,
+    webserverSync: true,
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  try {
+    await planReady;
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const status = await fetch(`${base}/api/sync`).then((response) => response.json());
+    const reportResponse = await fetch(`${base}/api/report`);
+    assert.equal(status.sync.state, "running");
+    assert.equal(status.sync.reportReady, true);
+    assert.equal(reportResponse.status, 200);
+    assert.equal((await reportResponse.json()).marker, "last-good");
+
+    releaseSync();
+    await server.syncController.waitForIdle();
     assert.equal((await fetch(`${base}/api/report`).then((response) => response.json())).marker, "current");
   } finally {
     releaseSync();
@@ -528,6 +581,31 @@ test("sync endpoint requires a same-origin custom action header", async () => {
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("runtime replacement is header-protected and closes an idle loopback server", async () => {
+  const server = await startWebServer(defaultOptions({
+    preloadedReport: newReport(),
+    host: "127.0.0.1",
+    port: 0,
+  }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const missingHeader = await fetch(`${base}/api/runtime/stop`, { method: "POST" });
+  assert.equal(missingHeader.status, 403);
+  const crossSite = await fetch(`${base}/api/runtime/stop`, {
+    method: "POST",
+    headers: { "x-tokenomics-action": "replace-runtime", "sec-fetch-site": "cross-site" },
+  });
+  assert.equal(crossSite.status, 403);
+
+  const closed = once(server, "close");
+  const accepted = await fetch(`${base}/api/runtime/stop`, {
+    method: "POST",
+    headers: { "x-tokenomics-action": "replace-runtime" },
+  });
+  assert.equal(accepted.status, 202);
+  assert.deepEqual(await accepted.json(), { stopping: true, runtimeId: RUNTIME_ID });
+  await closed;
 });
 
 test("sync endpoint coalesces concurrent runs and atomically publishes the new report", async () => {

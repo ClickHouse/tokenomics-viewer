@@ -602,6 +602,129 @@ test("Codex parser checkpoint preserves duplicate suppression across the byte bo
   assert.equal(resumedReport._usageEvents.length, 0);
 });
 
+test("Codex parser checkpoint preserves token usage record authority across the byte boundary", () => {
+  const sourceLabel = "codex-checkpoint-token-record-fixture";
+  const sessionId = "01a07682-5e9a-72d0-b128-35db975c5156";
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), sourceLabel);
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-09-06T12:00:00.000Z",
+    payload: {
+      id: sessionId,
+      cwd: "/tmp/checkpoint-token-record",
+    },
+  }), 1);
+  processLine(JSON.stringify({
+    type: "turn_context",
+    timestamp: "2026-09-06T12:00:01.000Z",
+    payload: {
+      turn_id: "01a07682-6000-7000-8000-000000000002",
+      cwd: "/tmp/checkpoint-token-record",
+      model: "gpt-5-codex",
+    },
+  }), 2);
+  processLine(JSON.stringify({
+    type: "token_usage_record",
+    timestamp: "2026-09-06T12:00:02.000Z",
+    payload: {
+      thread_id: sessionId,
+      response_id: "resp-checkpoint-child",
+      usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 110 },
+    },
+  }), 3);
+  const checkpoint = JSON.parse(JSON.stringify(processLine.checkpoint()));
+
+  const resumedReport = newReport();
+  const resumed = createLineProcessor(
+    resumedReport,
+    defaultOptions({ codexParserCheckpoint: checkpoint }),
+    sourceLabel,
+  );
+  resumed(JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-09-06T12:00:02.100Z",
+    payload: {
+      type: "token_count",
+      info: {
+        total_token_usage: { input_tokens: 10_000_100, cached_input_tokens: 9_000_090, output_tokens: 1_000_010 },
+        last_token_usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10 },
+      },
+    },
+  }), 4);
+
+  assert.equal(checkpoint.usageFormat, "token-usage-record");
+  assert.equal(resumedReport.sources.tokenCountSnapshots, 1);
+  assert.equal(resumedReport.sources.skippedTokenCountSnapshots, 1);
+  assert.equal(resumedReport.total.requests, 0);
+});
+
+test("owned but unsupported token usage records fail closed without poisoning later valid records", () => {
+  const sourceLabel = "codex-unsupported-token-record-fixture";
+  const sessionId = "01a07682-5e9a-72d0-b128-35db975c5156";
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), sourceLabel);
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-09-06T12:00:00.000Z",
+    payload: { id: sessionId, cwd: "/tmp/unsupported-token-record" },
+  }), 1);
+  processLine(JSON.stringify({
+    type: "token_usage_record",
+    timestamp: "2026-09-06T12:00:01.000Z",
+    payload: {
+      thread_id: sessionId,
+      response_id: "resp-unsupported",
+      usage: { future_token_unit: 100 },
+    },
+  }), 2);
+  processLine(JSON.stringify({
+    type: "token_usage_record",
+    timestamp: "2026-09-06T12:00:01.010Z",
+    payload: {
+      thread_id: sessionId,
+      response_id: "resp-recoverable",
+      usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 1_000_000 },
+    },
+  }), 3);
+  processLine(JSON.stringify({
+    type: "token_usage_record",
+    timestamp: "2026-09-06T12:00:01.020Z",
+    payload: {
+      thread_id: sessionId,
+      usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 110 },
+    },
+  }), 4);
+  processLine(JSON.stringify({
+    type: "token_usage_record",
+    timestamp: "2026-09-06T12:00:01.030Z",
+    payload: {
+      thread_id: sessionId,
+      response_id: "resp-recoverable",
+      usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 110 },
+    },
+  }), 5);
+  processLine(JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-09-06T12:00:01.100Z",
+    payload: {
+      type: "token_count",
+      info: {
+        total_token_usage: { input_tokens: 10_000_000, cached_input_tokens: 9_000_000, output_tokens: 1_000_000 },
+        last_token_usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10 },
+      },
+    },
+  }), 6);
+
+  assert.equal(report.sources.parseErrors, 3);
+  assert.equal(report.sources.skippedTokenCountSnapshots, 1);
+  assert.equal(report.total.requests, 1);
+  assert.equal(report.total.input, 10);
+  assert.equal(report.total.cacheRead, 90);
+  assert.equal(report.total.output, 10);
+  assert.equal(processLine.checkpoint().usageFormat, "token-usage-record");
+});
+
 test("Codex parser checkpoint fails closed for forks and incompatible identities", () => {
   const sourceLabel = "codex-checkpoint-safety-fixture";
   const report = newReport();
@@ -632,6 +755,45 @@ test("Codex parser checkpoint fails closed for forks and incompatible identities
       `${sourceLabel}-other`,
     ),
     /Codex parser checkpoint source mismatch/,
+  );
+  assert.throws(
+    () => createLineProcessor(
+      newReport(),
+      defaultOptions({
+        codexParserCheckpoint: {
+          ...checkpoint,
+          usageFormat: "token-unknown-format",
+        },
+      }),
+      sourceLabel,
+    ),
+    /Unsupported Codex usage format/,
+  );
+  assert.throws(
+    () => createLineProcessor(
+      newReport(),
+      defaultOptions({
+        codexParserCheckpoint: {
+          ...checkpoint,
+          usageFormat: "token-usage-record",
+          recentUsageResponseIds: [""],
+        },
+      }),
+      sourceLabel,
+    ),
+    /token usage record checkpoint is not safe/,
+  );
+
+  const legacyCheckpoint = { ...checkpoint, version: 1 };
+  delete legacyCheckpoint.usageFormat;
+  delete legacyCheckpoint.recentUsageResponseIds;
+  assert.throws(
+    () => createLineProcessor(
+      newReport(),
+      defaultOptions({ codexParserCheckpoint: legacyCheckpoint }),
+      sourceLabel,
+    ),
+    /requires a full source replay/,
   );
 
   const forked = createLineProcessor(newReport(), defaultOptions(), "codex-checkpoint-fork-fixture");

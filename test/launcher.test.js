@@ -7,6 +7,7 @@ const Path = require("node:path");
 const test = require("node:test");
 const {
   browserCommand,
+  dashboardStatus,
   dashboardReady,
   downloadClickHouseInstaller,
   ensureClickHouse,
@@ -18,6 +19,7 @@ const {
   runLauncher,
   waitForDashboardProcess,
 } = require("../lib/launcher");
+const { RUNTIME_ID } = require("../lib/core/runtime-identity");
 
 async function withStatusServer(payload, callback) {
   const http = require("node:http");
@@ -40,8 +42,12 @@ test("dashboard readiness requires a loopback sync-capable endpoint and the sele
   await withStatusServer({ sync: { available: true, engine: "sqlite", state: "running" } }, async (url) => {
     assert.equal(await dashboardReady(url, "clickhouse"), false);
   });
-  await withStatusServer({ sync: { available: true, engine: "clickhouse", state: "running" } }, async (url) => {
+  await withStatusServer({ sync: { available: true, engine: "clickhouse", runtimeId: RUNTIME_ID, state: "running" } }, async (url) => {
     assert.equal(await dashboardReady(url, "clickhouse"), true);
+  });
+  await withStatusServer({ sync: { available: true, engine: "clickhouse", state: "succeeded" } }, async (url) => {
+    assert.equal(await dashboardReady(url, "clickhouse"), false);
+    assert.equal((await dashboardStatus(url, "clickhouse")).kind, "stale");
   });
 });
 
@@ -103,8 +109,11 @@ test("launcher arguments keep orchestration flags separate from app arguments", 
     forceEngine: "clickhouse",
     noOpen: true,
     port: 9001,
+    legacyReleasesRoot: null,
     appArgs: ["--source", "codex"],
   });
+  assert.equal(parseLauncherArgs(["--legacy-releases-root", "/installed/releases"]).legacyReleasesRoot, "/installed/releases");
+  assert.throws(() => parseLauncherArgs(["--legacy-releases-root", "relative"]), /absolute/);
   assert.equal(parseLauncherArgs(["--no-clickhouse"]).forceEngine, "sqlite");
   assert.throws(() => parseLauncherArgs(["--sqlite", "--clickhouse"]), /only one/);
   assert.throws(() => parseLauncherArgs(["--port", "nope"]), /port/);
@@ -263,6 +272,74 @@ test("launcher reuses an existing dashboard and starts a protected sync", async 
   assert.deepEqual(calls[0], ["probe", "clickhouse"]);
   assert.ok(calls.includes("sync"));
   assert.ok(calls.includes("open"));
+});
+
+test("launcher replaces a stale runtime on the exact configured port", async () => {
+  const calls = [];
+  const exitCode = await runLauncher(["--no-open", "--legacy-releases-root", "/installed/releases"], {
+    dashboardStatus: async (_url, engine, runtimeId) => {
+      calls.push(["probe", engine, runtimeId]);
+      return { kind: "stale", sync: { state: "succeeded" } };
+    },
+    requestRuntimeStop: async () => { calls.push("stop-runtime"); return "unsupported"; },
+    stopLegacyDashboard: async (port, root) => { calls.push(["stop-legacy", port, root]); return true; },
+    portAvailable: async (port) => { calls.push(["available", port]); return true; },
+    ensureClickHouse: async () => calls.push("clickhouse"),
+    findAvailablePort: async (port) => { calls.push(["find-port", port]); return port; },
+    spawnTokenomics: async (args) => {
+      calls.push(["spawn", ...args]);
+      return { exit: Promise.resolve(0), stop: () => calls.push("stop-child") };
+    },
+    waitForDashboard: async () => calls.push("ready"),
+    log: () => {},
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls.slice(0, 6), [
+    ["probe", "clickhouse", RUNTIME_ID],
+    "stop-runtime",
+    ["stop-legacy", 8787, "/installed/releases"],
+    ["available", 8787],
+    "clickhouse",
+    ["find-port", 8787],
+  ]);
+  assert.ok(calls.some((entry) => Array.isArray(entry) && entry[0] === "spawn" && entry.includes("8787")));
+});
+
+test("legacy replacement kills only the sole listener rooted in an installed release", async () => {
+  const killed = [];
+  const stopped = await require("../lib/launcher").stopLegacyDashboard(8787, "/installed/releases", {
+    listeningProcessIds: async () => [101, 202],
+    processWorkingDirectory: async (pid) => pid === 202 ? "/installed/releases/v1" : "/other/service",
+    processCommandLine: async (pid) => pid === 202 ? "node /installed/releases/v1/app.js --webserver" : "node /other/service/app.js",
+    realpath: async (path) => path,
+    kill: (pid, signal) => killed.push([pid, signal]),
+  });
+  assert.equal(stopped, true);
+  assert.deepEqual(killed, [[202, "SIGTERM"]]);
+
+  assert.equal(await require("../lib/launcher").stopLegacyDashboard(8787, "/installed/releases", {
+    listeningProcessIds: async () => [202, 303],
+    processWorkingDirectory: async () => "/installed/releases/v1",
+    processCommandLine: async () => "node /installed/releases/v1/app.js --webserver",
+    realpath: async (path) => path,
+    kill: () => { throw new Error("must not kill ambiguous listeners"); },
+  }), false);
+
+  assert.equal(await require("../lib/launcher").stopLegacyDashboard(8787, "/installed/releases", {
+    listeningProcessIds: async () => [202],
+    processWorkingDirectory: async () => "/installed/releases/v1",
+    processCommandLine: async () => "node /installed/releases/v1/not-tokenomics.js --webserver",
+    realpath: async (path) => path,
+    kill: () => { throw new Error("must not kill a different entrypoint"); },
+  }), false);
+
+  assert.equal(await require("../lib/launcher").stopLegacyDashboard(8787, "/installed/releases", {
+    listeningProcessIds: async () => [202],
+    processWorkingDirectory: async () => "/installed/not-a-release",
+    processCommandLine: async () => "node /installed/not-a-release/app.js --webserver",
+    realpath: async (path) => path,
+    kill: () => { throw new Error("must not kill a process outside the releases root"); },
+  }), false);
 });
 
 test("browser opener failure does not fail an otherwise ready dashboard", async () => {

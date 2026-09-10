@@ -10,8 +10,14 @@ const test = require("node:test");
 const { buildReportFromClickHouse, loadConfiguration, saveConfiguration, syncDatabase } = require("../app");
 const {
   ANALYTICS_DERIVATION_VERSION,
+  CODEX_USAGE_DERIVATION_VERSION,
+  analyticsDerivationVersionFromFingerprint,
+  codexUsageDerivationVersionFromFingerprint,
 } = require("../lib/core/derivation");
-const { CLAUDE_REQUEST_CHECKPOINT_LIMIT } = require("../lib/ingest/parser");
+const {
+  CLAUDE_REQUEST_CHECKPOINT_LIMIT,
+  CODEX_PARSER_CHECKPOINT_VERSION,
+} = require("../lib/ingest/parser");
 const { createClickHouseBackend } = require("../lib/storage/clickhouse");
 const { defaultOptions } = require("./support/fixtures");
 
@@ -1157,6 +1163,155 @@ test("ClickHouse publishes only complete appended JSONL records in one stable so
       mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0),
       3,
       "the append must insert only the new usage row",
+    );
+  });
+});
+
+test("ClickHouse fully replays a Codex source once when its parser checkpoint predates format detection", async () => {
+  const jsonl = createSessionFile({ rows: 2 });
+  const mock = createClickHouseServer();
+  const progressEvents = [];
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_stale_checkpoint_test",
+      paths: [jsonl],
+      progress: false,
+      onSyncProgress: (event) => progressEvents.push(event),
+    });
+    await syncDatabase(options);
+
+    const initialSource = mock.visibleRows("sources")[0];
+    const initialImportId = initialSource.import_id;
+    const staleCheckpoint = JSON.parse(initialSource.parser_checkpoint);
+    assert.equal(staleCheckpoint.version, CODEX_PARSER_CHECKPOINT_VERSION);
+    staleCheckpoint.version = CODEX_PARSER_CHECKPOINT_VERSION - 1;
+    delete staleCheckpoint.usageFormat;
+    delete staleCheckpoint.recentUsageResponseIds;
+    initialSource.parser_checkpoint = JSON.stringify(staleCheckpoint);
+
+    progressEvents.length = 0;
+    const report = await syncDatabase(options);
+
+    const currentSource = mock.visibleRows("sources")[0];
+    assert.equal(report.total.requests, 2);
+    assert.notEqual(currentSource.import_id, initialImportId);
+    assert.equal(JSON.parse(currentSource.parser_checkpoint).version, CODEX_PARSER_CHECKPOINT_VERSION);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(
+      mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0),
+      4,
+      "the one-time replay must replace the unchanged old source epoch",
+    );
+    assert.equal(progressEvents.find((event) => event.phase === "processing").reportInvalidated, true);
+
+    const generationCount = mock.activeRows.import_generations.length;
+    progressEvents.length = 0;
+    await syncDatabase(options);
+    assert.equal(mock.activeRows.import_generations.length, generationCount);
+    assert.equal(
+      mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0),
+      4,
+      "the upgraded checkpoint must not replay the source a second time",
+    );
+    assert.equal(progressEvents.find((event) => event.phase === "processing").reportInvalidated, false);
+  });
+});
+
+test("ClickHouse refuses a future Codex parser checkpoint without replacing committed data", async () => {
+  const jsonl = createSessionFile({ rows: 2 });
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_future_checkpoint_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+
+    const initialSource = mock.visibleRows("sources")[0];
+    const initialImportId = initialSource.import_id;
+    const futureCheckpoint = JSON.parse(initialSource.parser_checkpoint);
+    futureCheckpoint.version = CODEX_PARSER_CHECKPOINT_VERSION + 1;
+    initialSource.parser_checkpoint = JSON.stringify(futureCheckpoint);
+
+    await assert.rejects(
+      syncDatabase(options),
+      /checkpoint version 3 is newer than supported version 2/,
+    );
+    assert.equal(mock.visibleRows("sources")[0].import_id, initialImportId);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(
+      mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0),
+      2,
+      "a downgraded reader must not stage replacement usage",
+    );
+  });
+});
+
+test("ClickHouse fully replays an unchanged source once when a named derivation is missing", async () => {
+  const jsonl = createSessionFile({ rows: 2 });
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_derivation_replay_test",
+      paths: [jsonl],
+      progress: false,
+    });
+    await syncDatabase(options);
+
+    const initialSource = mock.visibleRows("sources")[0];
+    const initialImportId = initialSource.import_id;
+    assert.equal(
+      analyticsDerivationVersionFromFingerprint(initialSource.fingerprint),
+      ANALYTICS_DERIVATION_VERSION,
+    );
+    initialSource.fingerprint = initialSource.fingerprint
+      .split("|")
+      .filter((part) => !part.startsWith("codexUsageDerivationVersion="))
+      .join("|");
+    assert.equal(
+      analyticsDerivationVersionFromFingerprint(initialSource.fingerprint),
+      ANALYTICS_DERIVATION_VERSION,
+      "the global version deliberately collides with the current version",
+    );
+    assert.equal(codexUsageDerivationVersionFromFingerprint(initialSource.fingerprint), null);
+
+    const report = await syncDatabase(options);
+
+    const currentSource = mock.visibleRows("sources")[0];
+    assert.equal(report.total.requests, 2);
+    assert.notEqual(currentSource.import_id, initialImportId);
+    assert.equal(
+      analyticsDerivationVersionFromFingerprint(currentSource.fingerprint),
+      ANALYTICS_DERIVATION_VERSION,
+    );
+    assert.equal(
+      codexUsageDerivationVersionFromFingerprint(currentSource.fingerprint),
+      CODEX_USAGE_DERIVATION_VERSION,
+    );
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+    assert.equal(
+      mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0),
+      4,
+      "the derivation upgrade must replace rather than append to the old source epoch",
+    );
+
+    const generationCount = mock.activeRows.import_generations.length;
+    await syncDatabase(options);
+    assert.equal(mock.activeRows.import_generations.length, generationCount);
+    assert.equal(
+      mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0),
+      4,
+      "the named derivation marker must prevent a second replay",
     );
   });
 });

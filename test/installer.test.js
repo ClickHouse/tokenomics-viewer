@@ -10,6 +10,7 @@ const Util = require("node:util");
 
 const execFile = Util.promisify(ChildProcess.execFile);
 const root = Path.resolve(__dirname, "..");
+const { RUNTIME_ID } = require("../lib/core/runtime-identity");
 
 test("one-line installer is offline-testable, repeatable, and preserves data", async () => {
   const temporary = await fs.mkdtemp(Path.join(Os.tmpdir(), "tokenomics-installer-"));
@@ -39,6 +40,7 @@ test("one-line installer is offline-testable, repeatable, and preserves data", a
     schema: 1,
     command: Path.join(binDir, "tokenomics-launch"),
     args: [],
+    runtimeId: RUNTIME_ID,
   });
 
   const help = await execFile(Path.join(binDir, "tokenomics-launch"), ["--help"], { env });
@@ -56,6 +58,9 @@ test("one-line installer is offline-testable, repeatable, and preserves data", a
   const nextRelease = await fs.realpath(Path.join(installRoot, "current"));
 
   assert.notEqual(nextRelease, previousRelease);
+  const launcherWrapper = await fs.readFile(Path.join(binDir, "tokenomics-launch"), "utf8");
+  assert.match(launcherWrapper, /--legacy-releases-root/);
+  assert.match(launcherWrapper, new RegExp(`${Path.basename(installRoot)}/releases`));
   assert.equal(await fs.readFile(dataMarker, "utf8"), "keep me\n");
   assert.equal(await fs.readFile(Path.join(nextRelease, "package.json"), "utf8"), await fs.readFile(Path.join(root, "package.json"), "utf8"));
 

@@ -665,6 +665,28 @@ test("normalizes official nested Codex cache details and subtracts cumulative de
   });
 });
 
+test("a legacy ownership boundary establishes a cumulative baseline when last usage is absent", () => {
+  const first = usageFromCodexInfo({
+    total_token_usage: {
+      input_tokens: 1_000_000_000,
+      cached_input_tokens: 900_000_000,
+      output_tokens: 10_000_000,
+    },
+  }, null, true);
+  const second = usageFromCodexInfo({
+    total_token_usage: {
+      input_tokens: 1_000_000_100,
+      cached_input_tokens: 900_000_090,
+      output_tokens: 10_000_010,
+    },
+  }, first.totalUsage);
+
+  assert.equal(usage.hasUsageTokens(first.usage), false);
+  assert.equal(second.usage.input, 10);
+  assert.equal(second.usage.cacheRead, 90);
+  assert.equal(second.usage.output, 10);
+});
+
 test("keeps cumulative deltas stable when Codex adds cache_write_input_tokens", () => {
   const previous = usageFromCodexInfo({
     total_token_usage: {

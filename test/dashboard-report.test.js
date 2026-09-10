@@ -32,6 +32,15 @@ test("dashboard summary exposes service modes as distinct analytics buckets", ()
   assert.match(html, /Unknown/);
 });
 
+test("dashboard withholds report sections until the backend publishes a valid generation", () => {
+  const html = dashboardHtml();
+  assert.match(html, /data-report-ready="false"/);
+  assert.match(html, /id="report-pending"/);
+  assert.match(html, /if \(sync\.reportReady === false\)/);
+  assert.match(html, /revealReadyReport\(sync\)/);
+  assert.match(html, /document\.body\.dataset\.reportReady = 'true'/);
+});
+
 test("dashboard summary exposes the current UTC calendar month", () => {
   const report = newReport();
   report.monthlyCostLimitUsd = 100;
