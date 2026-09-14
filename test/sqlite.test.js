@@ -295,7 +295,7 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
 
   const migrated = await loadConfiguration(options);
   assert.notEqual(migrated.revision, "packaged-3");
-  assert.equal(migrated.settings.pricingRevision, "packaged-5");
+  assert.equal(migrated.settings.pricingRevision, "packaged-6");
   assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
   const solRows = migrated.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
   assert.equal(solRows.length, 4);
@@ -336,6 +336,58 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
   try {
     const sourceAfter = storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
     assert.deepEqual({ ...sourceAfter }, { ...sourceBefore });
+    assert.equal(storedAfter.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 2);
+  } finally {
+    storedAfter.close();
+  }
+});
+
+test("SQLite upgrades packaged-5 auto-review pricing without reimport", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-auto-review-upgrade-test-"));
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const jsonl = Path.join(tmp, "session.jsonl");
+  fs.writeFileSync(jsonl, [
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-08-08T00:00:00.000Z",
+      payload: { cwd: "/tmp/project-auto-review-upgrade", model: "codex-auto-review", effort: "high" },
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-08T00:00:01.000Z",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 2_000_000, cached_input_tokens: 1_000_000, output_tokens: 1_000_000 } } },
+    }),
+    "",
+  ].join("\n"));
+  const options = defaultOptions({ db, paths: [jsonl] });
+
+  await syncDatabase(options);
+  const storedBefore = new DatabaseSync(db);
+  const sourceBefore = storedBefore.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
+  const currentRevision = storedBefore.prepare("SELECT revision FROM configuration_revisions ORDER BY committed_at_ms DESC LIMIT 1").get().revision;
+  storedBefore.prepare("UPDATE configuration_revisions SET revision = 'packaged-5' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-5', value_json = ? WHERE revision = ? AND key = 'pricingRevision'").run(JSON.stringify("packaged-5"), currentRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-5' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("UPDATE pricing_catalog SET revision = 'packaged-5' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-5' AND model = 'codex-auto-review' AND effective_from IS NOT NULL").run();
+  storedBefore.prepare(`
+    UPDATE pricing_catalog
+    SET row_id = 'openai:codex-auto-review:short::', effective_from = NULL, effective_until = NULL
+    WHERE revision = 'packaged-5' AND model = 'codex-auto-review'
+  `).run();
+  storedBefore.close();
+
+  const upgraded = await loadConfiguration(options);
+  const autoReviewRows = upgraded.prices.filter((row) => row.model === "codex-auto-review");
+  assert.equal(upgraded.settings.pricingRevision, "packaged-6");
+  assert.equal(autoReviewRows.length, 2);
+  assert.ok(autoReviewRows.some((row) => row.effectiveUntil === "2026-08-06T23:59:59.999Z" && row.input === 2.5));
+  assert.ok(autoReviewRows.some((row) => row.effectiveFrom === "2026-08-07T00:00:00.000Z" && row.input === 0.2));
+  assert.equal(buildReportFromDatabase(db, options).total.costUsd, 1.42);
+
+  const storedAfter = new DatabaseSync(db);
+  try {
+    assert.deepEqual({ ...storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get() }, { ...sourceBefore });
     assert.equal(storedAfter.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 2);
   } finally {
     storedAfter.close();

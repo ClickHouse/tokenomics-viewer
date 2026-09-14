@@ -494,7 +494,7 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -508,6 +508,53 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
       .filter((request) => request.query.trimStart().startsWith("INSERT INTO"));
     assert.equal(stable.revision, upgraded.revision);
     assert.equal(repeatedInserts.length, 0, "completed packaged upgrade must not replay pricing overlays");
+  });
+});
+
+test("ClickHouse packaged-5 upgrade materializes temporal auto-review rows before the revision marker", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_auto_review_upgrade_test" });
+    await loadConfiguration(options);
+
+    const legacyRevision = "legacy-packaged-5-auto-review";
+    mock.activeRows.configuration_revisions[0].revision = legacyRevision;
+    for (const row of mock.activeRows.analytics_settings) {
+      row.revision = legacyRevision;
+      if (row.key === "pricingRevision") row.value_json = JSON.stringify("packaged-5");
+    }
+    for (const row of mock.activeRows.configuration_metadata) {
+      row.revision = legacyRevision;
+      row.packaged_revision = "packaged-5";
+    }
+    mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
+      if (row.model !== "codex-auto-review") return [{ ...row, revision: legacyRevision }];
+      if (row.effective_until !== "2026-08-06T23:59:59.999Z") return [];
+      return [{
+        ...row,
+        revision: legacyRevision,
+        row_id: `${row.provider}:${row.model}:${row.variant}`,
+        effective_from: "",
+        effective_until: "",
+      }];
+    });
+
+    const before = mock.requests.length;
+    const upgraded = await loadConfiguration(options);
+    const requests = mock.requests.slice(before);
+    const autoReviewRows = upgraded.prices.filter((row) => row.model === "codex-auto-review");
+
+    assert.equal(autoReviewRows.length, 2);
+    assert.ok(autoReviewRows.some((row) => row.effectiveUntil === "2026-08-06T23:59:59.999Z" && row.input === 2.5));
+    assert.ok(autoReviewRows.some((row) => row.effectiveFrom === "2026-08-07T00:00:00.000Z" && row.input === 0.2));
+    assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
+    const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
+    const marker = requests.findIndex((request) => request.query.startsWith("INSERT INTO configuration_revisions"));
+    assert.ok(usageOverlay >= 0 && marker > usageOverlay);
+
+    const stableStart = mock.requests.length;
+    assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
+    assert.equal(mock.requests.slice(stableStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
   });
 });
 
@@ -563,7 +610,7 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     assert.ok(upgraded.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
     const solRows = upgraded.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
@@ -621,6 +668,16 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
           source_url: "https://developers.openai.com/api/docs/pricing",
         }];
       }
+      if (row.model === "codex-auto-review") {
+        if (row.effective_until !== "2026-08-06T23:59:59.999Z") return [];
+        return [{
+          ...row,
+          revision: legacyRevision,
+          row_id: `${row.provider}:${row.model}:${row.variant}`,
+          effective_from: "",
+          effective_until: "",
+        }];
+      }
       if (!temporalModels.has(row.model)) {
         return [{
           ...row,
@@ -654,7 +711,7 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")));
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
 
     const stableStart = mock.requests.length;
     assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
@@ -667,18 +724,18 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(mock.requests.slice(futureProjectionStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     futureMetadata.pricing_projection_revision = "2";
-    futureMetadata.packaged_revision = "packaged-6";
+    futureMetadata.packaged_revision = "packaged-7";
     const futurePackageStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-6 is newer than packaged-5/);
+    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-7 is newer than packaged-6/);
     assert.equal(mock.requests.slice(futurePackageStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     mock.activeRows.configuration_metadata = mock.activeRows.configuration_metadata
       .filter((row) => row.revision !== upgraded.revision);
     mock.activeRows.analytics_settings.find((row) => (
       row.revision === upgraded.revision && row.key === "pricingRevision"
-    )).value_json = JSON.stringify(`packaged-6:${"e".repeat(32)}`);
+    )).value_json = JSON.stringify(`packaged-7:${"e".repeat(32)}`);
     const futurePublicStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-6:.* is newer than packaged-5/);
+    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-7:.* is newer than packaged-6/);
     assert.equal(mock.requests.slice(futurePublicStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
   });
 });
@@ -710,7 +767,7 @@ test("ClickHouse rebuilds managed overlays when projection metadata is stale", a
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -747,7 +804,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.equal(upgraded.settings.monthlyCostLimitUsd, 321);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
@@ -756,7 +813,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     assert.match(requests[usageOverlay].query, /parseDateTime64BestEffortOrNull\(toString\(raw\.timestamp\)\)/);
     assert.ok(mock.activeRows.configuration_metadata.some((row) => (
       row.revision === upgraded.revision && row.managed_pricing === 1 &&
-      row.packaged_revision === "packaged-5" && row.pricing_projection_revision === "2"
+      row.packaged_revision === "packaged-6" && row.pricing_projection_revision === "2"
     )));
 
     const stableStart = mock.requests.length;
@@ -832,7 +889,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     await loadConfiguration(options);
 
     const legacyRevision = "81fbbf48-6215-419b-bffb-ddd36a1e96d4";
-    const legacyPricingRevision = "packaged-5:fd7377f5073cecef6e9f9b83e190c1c4";
+    const legacyPricingRevision = "packaged-6:fd7377f5073cecef6e9f9b83e190c1c4";
     const historicalUntil = "2026-07-29T23:59:59.999Z";
     const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
     mock.activeRows.configuration_revisions[0].revision = legacyRevision;
@@ -887,7 +944,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     const rebasedLuna = rebased.prices.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short");
 
     assert.notEqual(rebased.revision, legacyRevision);
-    assert.match(rebased.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(rebased.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.equal(rebasedLuna.input, 99);
     assert.equal(rebased.prices.some((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z"), false);
     assert.ok(rebaseRequests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));

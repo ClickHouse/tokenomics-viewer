@@ -499,10 +499,11 @@ Claude's first transition into fast mode can invalidate the current prompt
 cache; Tokenomics prices the token buckets recorded by the harness and does not
 guess that transition from surrounding requests.
 
-`codex-auto-review` is included at effective rates of `$2.50` input, `$0.25`
-cached input, and `$15.00` output per million tokens. Those rates are derived
-from an observed OpenAI workspace billing export; OpenAI does not currently
-publish a separate public model-rate page for this internal model id.
+`codex-auto-review` uses effective rates of `$2.50` input, `$0.25` cached
+input, and `$15.00` output per million tokens through August 6, 2026, then
+`$0.20`, `$0.02`, and `$1.20` respectively from August 7. The rates and cutoff
+are derived from observed OpenAI workspace billing exports; OpenAI does not
+currently publish a separate public model-rate page for this internal model id.
 
 omp (oh-my-pi) cost is estimated from the packaged omp pricing catalog using
 official Z.AI (Zhipu AI) GLM rates in USD per million tokens
