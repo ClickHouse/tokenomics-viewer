@@ -581,6 +581,90 @@ test("syncDatabase reuses persisted Codex parent metadata for a child-only impor
   }
 });
 
+test("syncDatabase stores modern Codex parent_thread_id metadata", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-modern-parent-db-test-"));
+  const child = Path.join(tmp, "child.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const parentSessionId = "019f48d9-4ccc-73c2-bf45-a84e4951347e";
+  const childSessionId = "019f4973-7053-7623-a798-0e4cf81ef014";
+
+  fs.writeFileSync(child, [
+    JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-08-08T19:09:46.579Z",
+      payload: {
+        id: childSessionId,
+        parent_thread_id: parentSessionId,
+        source: { subagent: { thread_spawn: { parent_thread_id: parentSessionId } } },
+        history_mode: "paginated",
+        subagent_history_start_ordinal: 202,
+        cwd: "/tmp/modern-child-project",
+      },
+    }),
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-08-08T19:09:47.000Z",
+      payload: { cwd: "/tmp/modern-child-project", model: "gpt-5-codex" },
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-08T19:09:48.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10 },
+          total_token_usage: { input_tokens: 9_000_100, cached_input_tokens: 8_000_090, output_tokens: 900_010 },
+        },
+      },
+    }),
+    "",
+  ].join("\n"));
+
+  const report = await syncDatabase(defaultOptions({ db, paths: [child] }));
+  assert.equal(report.total.requests, 1);
+  assert.equal(report.total.input, 10);
+  assert.equal(report.total.cacheRead, 90);
+  assert.equal(report.total.output, 10);
+
+  const sqlite = new DatabaseSync(db);
+  try {
+    const stored = sqlite.prepare(`
+      SELECT parent_session_id, source_path
+      FROM codex_sessions
+      WHERE session_id = ?
+    `).get(childSessionId);
+    assert.deepEqual({ ...stored }, {
+      parent_session_id: parentSessionId,
+      source_path: child,
+    });
+
+    sqlite.prepare("UPDATE codex_sessions SET parent_session_id = NULL WHERE session_id = ?").run(childSessionId);
+    const previousDerivationVersion = CODEX_USAGE_DERIVATION_VERSION - 1;
+    sqlite.prepare(`
+      UPDATE sources
+      SET fingerprint = replace(fingerprint, ?, ?)
+      WHERE source_path = ?
+    `).run(
+      `codexUsageDerivationVersion=${CODEX_USAGE_DERIVATION_VERSION}`,
+      `codexUsageDerivationVersion=${previousDerivationVersion}`,
+      child,
+    );
+  } finally {
+    sqlite.close();
+  }
+
+  await syncDatabase(defaultOptions({ db, paths: [child] }));
+  const upgraded = new DatabaseSync(db);
+  try {
+    assert.equal(
+      upgraded.prepare("SELECT parent_session_id FROM codex_sessions WHERE session_id = ?").get(childSessionId).parent_session_id,
+      parentSessionId,
+    );
+  } finally {
+    upgraded.close();
+  }
+});
+
 test("strict SQLite source failure rolls back current headers and rows without losing persisted parents", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-header-atomicity-test-"));
   const parent = Path.join(tmp, "parent.jsonl");

@@ -16,6 +16,23 @@ const {
 } = require("../app");
 const { defaultOptions, roundCosts, simpleUsage } = require("./support/fixtures");
 
+test("Codex parent identity supports legacy and modern session metadata", () => {
+  const legacyParent = "019f48d9-4ccc-73c2-bf45-a84e4951347e";
+  const modernParent = "019f4973-7053-7623-a798-0e4cf81ef014";
+
+  assert.equal(usage.codexParentSessionId({
+    forked_from_id: legacyParent,
+    parent_thread_id: modernParent,
+  }), legacyParent);
+  assert.equal(usage.codexParentSessionId({
+    forked_from_id: "invalid",
+    parent_thread_id: modernParent,
+  }), modernParent);
+  assert.equal(usage.codexParentSessionId({
+    source: { subagent: { thread_spawn: { parent_thread_id: modernParent } } },
+  }), modernParent);
+});
+
 test("aggregates Claude by model, deduplicates requestId, and prices cache buckets", () => {
   const report = newReport();
   const processLine = createLineProcessor(report, defaultOptions(), "claude-fixture");
