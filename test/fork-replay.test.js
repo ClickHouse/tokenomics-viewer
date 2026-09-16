@@ -166,6 +166,47 @@ test("normalizes uppercase fork parent IDs before parent trace lookup", () => {
   assert.equal(report.total.output, 5);
 });
 
+test("collects parent traces across Codex continuation files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-fork-continuation-test-"));
+  const parentFirst = Path.join(tmp, "a-parent-first.jsonl");
+  const child = Path.join(tmp, "m-child.jsonl");
+  const parentSecond = Path.join(tmp, "z-parent-second.jsonl");
+  const parentSessionId = "019d39a3-df16-7c62-9614-4dcf15617297";
+  const childSessionId = "019d4cf5-4803-7eb1-a490-19abc40e6a69";
+  const firstTurnId = "019d39a7-67c2-7363-aa28-0b83b8639503";
+  const secondTurnId = "019d39a7-67c2-7363-aa28-0b83b8639513";
+  const childTurnId = "019d4cf5-4d1e-79e2-bbb1-686e38bbb7";
+  const tokenCount = (timestamp, input) => JSON.stringify({
+    type: "event_msg",
+    timestamp,
+    payload: { type: "token_count", info: { last_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: 1 } } },
+  });
+  const parentSegment = (timestamp, turnId, input) => [
+    JSON.stringify({ type: "session_meta", timestamp, payload: { id: parentSessionId, cwd: "/tmp/parent-continuation" } }),
+    JSON.stringify({ type: "event_msg", timestamp, payload: { type: "task_started", turn_id: turnId } }),
+    JSON.stringify({ type: "turn_context", timestamp, payload: { turn_id: turnId, cwd: "/tmp/parent-continuation", model: "gpt-5.5" } }),
+    tokenCount(timestamp, input),
+    "",
+  ].join("\n");
+  fs.writeFileSync(parentFirst, parentSegment("2026-04-02T06:50:36.000Z", firstTurnId, 10));
+  fs.writeFileSync(parentSecond, parentSegment("2026-04-03T06:50:36.000Z", secondTurnId, 20));
+  fs.writeFileSync(child, [
+    JSON.stringify({ type: "session_meta", timestamp: "2026-04-04T06:50:36.000Z", payload: { id: childSessionId, forked_from_id: parentSessionId, cwd: "/tmp/child-continuation" } }),
+    JSON.stringify({ type: "event_msg", timestamp: "2026-04-04T06:50:36.100Z", payload: { type: "task_started", turn_id: firstTurnId } }),
+    tokenCount("2026-04-04T06:50:36.200Z", 999),
+    JSON.stringify({ type: "event_msg", timestamp: "2026-04-04T06:50:36.300Z", payload: { type: "task_started", turn_id: childTurnId } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-04-04T06:50:36.400Z", payload: { turn_id: childTurnId, cwd: "/tmp/child-continuation", model: "gpt-5.5" } }),
+    tokenCount("2026-04-04T06:50:36.500Z", 5),
+    "",
+  ].join("\n"));
+
+  const report = await buildReport(defaultOptions({ paths: [parentFirst, child, parentSecond] }));
+
+  assert.equal(report.total.requests, 3);
+  assert.equal(report.total.input, 35);
+  assert.equal(report.projects["/tmp/child-continuation"].requests, 1);
+});
+
 test("skips inherited snapshots in a child-only log when the parent source is missing", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-fork-missing-parent-test-"));
   const child = Path.join(tmp, "child.jsonl");

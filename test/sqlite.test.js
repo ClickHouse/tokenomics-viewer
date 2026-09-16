@@ -513,6 +513,41 @@ test("SQLite replaces a Codex source when archiving moves the same session", asy
   }
 });
 
+test("SQLite retains disjoint Codex continuation files with the same session id", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-continuation-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const sessionId = "019f5840-0000-7000-8000-000000000011";
+  const session = (timestamp, inputTokens) => [
+    JSON.stringify({ type: "session_meta", timestamp, payload: { id: sessionId, cwd: "/tmp/continuation" } }),
+    JSON.stringify({ type: "turn_context", timestamp, payload: { cwd: "/tmp/continuation", model: "gpt-5.4-mini" } }),
+    JSON.stringify({ type: "event_msg", timestamp, payload: { type: "token_count", info: { last_token_usage: { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 1 } } } }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, session("2026-07-12T10:00:00.000Z", 10));
+  fs.writeFileSync(second, session("2026-07-13T10:00:00.000Z", 100));
+
+  await syncDatabase(defaultOptions({ db, paths: [first] }));
+  const report = await syncDatabase(defaultOptions({ db, paths: [first, second] }));
+
+  assert.equal(report.total.requests, 2);
+  assert.equal(report.total.input, 110);
+  const stored = new DatabaseSync(db);
+  try {
+    assert.deepEqual(
+      stored.prepare("SELECT source_path FROM sources ORDER BY source_path").all().map((row) => row.source_path),
+      [first, second],
+    );
+    assert.deepEqual(
+      stored.prepare("SELECT source_path FROM codex_session_sources WHERE session_id = ? ORDER BY source_path").all(sessionId).map((row) => row.source_path),
+      [first, second],
+    );
+  } finally {
+    stored.close();
+  }
+});
+
 test("syncDatabase reuses persisted Codex parent metadata for a child-only import", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-fork-db-test-"));
   const parent = Path.join(tmp, "parent.jsonl");

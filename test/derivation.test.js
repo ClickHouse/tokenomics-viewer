@@ -6,6 +6,7 @@ const {
   ANALYTICS_DERIVATION_VERSION,
   CODEX_USAGE_DERIVATION_VERSION,
   sameAnalyticsDerivation,
+  sameSourceContentFingerprint,
   sameSourceFingerprint,
   sourceFingerprint,
 } = require("../lib/core/derivation");
@@ -72,4 +73,21 @@ test("legacy pricing fingerprint fields do not force a source reimport", () => {
   const legacy = `${current}|pricingCatalogVersion=1|pricingRevision=catalog-a`;
 
   assert.equal(sameSourceFingerprint(legacy, current), true);
+});
+
+test("source content fingerprints ignore derived revisions but preserve physical identity", () => {
+  const current = sourceFingerprint(sourceParts);
+  const rederived = sourceFingerprint(sourceParts, {
+    analyticsDerivationVersion: ANALYTICS_DERIVATION_VERSION + 1,
+    codexUsageDerivationVersion: CODEX_USAGE_DERIVATION_VERSION + 1,
+  });
+  const differentSource = sourceFingerprint({ ...sourceParts, size: sourceParts.size + 1 });
+
+  assert.equal(sameSourceContentFingerprint(current, rederived), true);
+  assert.equal(sameSourceContentFingerprint(current, differentSource), false);
+  assert.equal(sameSourceContentFingerprint(null, current), false);
+  assert.equal(
+    sameSourceContentFingerprint("analyticsDerivationVersion=1", "analyticsDerivationVersion=2"),
+    false,
+  );
 });

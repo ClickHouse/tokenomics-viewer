@@ -364,7 +364,7 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
         const generationId = url.searchParams.get("param_generation");
         const rowsBySession = new Map();
         for (const row of visibleRows("codex_session_versions", generationId)) {
-          rowsBySession.set(row.session_id, row);
+          rowsBySession.set(`${row.session_id}\u0000${row.source_path}`, row);
         }
         const rows = [...rowsBySession.values()];
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
@@ -1138,6 +1138,29 @@ test("ClickHouse replaces a Codex source when archiving moves the same session",
     assert.equal(report.total.requests, 2);
     assert.deepEqual(mock.visibleRows("sources").map((row) => row.source_path), [archived]);
     assert.equal(mock.visibleRows("usage_events").length, 2);
+  });
+});
+
+test("ClickHouse retains disjoint Codex continuation files with the same session id", async () => {
+  const sessionId = "019f5840-0000-7000-8000-000000000012";
+  const first = createSessionFile({ rows: 2, project: "/tmp/continuation-first", sessionId });
+  const second = createSessionFile({ rows: 3, project: "/tmp/continuation-second", sessionId });
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const base = {
+      dbEngine: "clickhouse",
+      clickhouseDatabase: "tokenomics_continuation_test",
+      clickhouseUrl: url,
+      progress: false,
+    };
+    await syncDatabase(defaultOptions({ ...base, paths: [first] }));
+    const report = await syncDatabase(defaultOptions({ ...base, paths: [first, second] }));
+
+    assert.equal(report.total.requests, 5);
+    assert.deepEqual(mock.visibleRows("sources").map((row) => row.source_path).sort(), [first, second].sort());
+    assert.equal(mock.visibleRows("usage_events").length, 5);
+    assert.equal(mock.visibleRows("codex_session_versions").length, 2);
   });
 });
 

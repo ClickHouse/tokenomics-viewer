@@ -534,6 +534,20 @@ For a smaller diagnostic run:
 tokenomics --sync --db-engine clickhouse --source codex --limit-files 20
 ```
 
+Each sync also emits single-line JSON records prefixed with `[sync-metric]`.
+They cover discovery, per-source imports, same-session source decisions, and the
+final report snapshot. The records include request, token, cost, pricing,
+parser, date-range, model, agent, and service-mode metrics so runs can be
+compared with standard JSON tooling:
+
+```bash
+tokenomics --sync --source codex 2>&1 | rg '^\[sync-metric\]'
+```
+
+Structured diagnostic records use stable hashed source and session identifiers
+instead of raw paths or session IDs. Existing human-readable progress messages
+remain available for interactive troubleshooting.
+
 ### `chctl` Is Not Found
 
 ```bash
