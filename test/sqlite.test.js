@@ -55,6 +55,8 @@ test("SQLite backend factory creates an empty database and report", () => {
     skippedFiles: 0,
     tokenCountSnapshots: 0,
     skippedTokenCountSnapshots: 0,
+    duplicateUsageEvents: 0,
+    conflictingUsageEvents: 0,
   });
 });
 
@@ -444,7 +446,7 @@ test("SQLite reimports a missing named derivation exactly once", async () => {
     assert.equal(stored.prepare("SELECT fingerprint FROM sources WHERE source_path = ?").get(jsonl).fingerprint, currentFingerprint);
     assert.match(currentFingerprint, new RegExp(`analyticsDerivationVersion=${ANALYTICS_DERIVATION_VERSION}`));
     assert.match(currentFingerprint, new RegExp(`codexUsageDerivationVersion=${CODEX_USAGE_DERIVATION_VERSION}`));
-    assert.equal(stored.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, "1");
+    assert.equal(stored.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, "2");
     stored.prepare("UPDATE sources SET fingerprint = ? WHERE source_path = ?").run(
       currentFingerprint
         .split("|")
@@ -546,6 +548,84 @@ test("SQLite retains disjoint Codex continuation files with the same session id"
   } finally {
     stored.close();
   }
+});
+
+test("SQLite deduplicates identical Codex response IDs across continuation files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-global-dedup-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const sessionId = "019f5840-0000-7000-8000-000000000012";
+  const transcript = (usageTimestamp) => [
+    JSON.stringify({ type: "session_meta", timestamp: "2026-09-01T10:00:00.000Z", payload: { id: sessionId, cwd: "/tmp/global-dedup" } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-09-01T10:00:00.000Z", payload: { cwd: "/tmp/global-dedup", model: "gpt-5.6-luna" } }),
+    JSON.stringify({
+      type: "token_usage_record",
+      timestamp: usageTimestamp,
+      payload: {
+        thread_id: sessionId,
+        response_id: "resp-shared",
+        usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 110 },
+      },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, transcript("2026-09-01T10:00:00.000Z"));
+  fs.writeFileSync(second, transcript("2026-09-01T10:00:01.000Z"));
+
+  const report = await syncDatabase(defaultOptions({ db, paths: [first, second] }));
+
+  assert.equal(report.total.requests, 1);
+  assert.equal(report.sources.duplicateUsageEvents, 1);
+  assert.equal(report.provenance.codexUsageDerivationComplete, true);
+  assert.match(report.provenance.generationId, /^[a-f0-9-]{36}$/);
+  assert.match(report.provenance.committedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const rebuilt = buildReportFromDatabase(db, defaultOptions());
+  assert.equal(rebuilt.provenance.generationId, report.provenance.generationId);
+  assert.equal(rebuilt.provenance.committedAt, report.provenance.committedAt);
+  const unchanged = await syncDatabase(defaultOptions({ db, paths: [first, second] }));
+  assert.equal(unchanged.provenance.generationId, report.provenance.generationId);
+  assert.equal(unchanged.provenance.committedAt, report.provenance.committedAt);
+  const stored = new DatabaseSync(db);
+  try {
+    const rows = stored.prepare("SELECT event_key, payload_hash FROM usage_events ORDER BY source_path").all();
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].event_key, "request:resp-shared");
+    assert.equal(rows[1].event_key, "request:resp-shared");
+    assert.equal(rows[0].payload_hash, rows[1].payload_hash);
+    assert.match(rows[0].payload_hash, /^[a-f0-9]{64}$/);
+  } finally {
+    stored.close();
+  }
+});
+
+test("SQLite rejects conflicting Codex response IDs across continuation files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-global-conflict-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const sessionId = "019f5840-0000-7000-8000-000000000013";
+  const transcript = (inputTokens) => [
+    JSON.stringify({ type: "session_meta", timestamp: "2026-09-01T10:00:00.000Z", payload: { id: sessionId, cwd: "/tmp/global-conflict" } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-09-01T10:00:00.000Z", payload: { cwd: "/tmp/global-conflict", model: "gpt-5.6-luna" } }),
+    JSON.stringify({
+      type: "token_usage_record",
+      timestamp: "2026-09-01T10:00:00.000Z",
+      payload: {
+        thread_id: sessionId,
+        response_id: "resp-conflict",
+        usage: { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 10, total_tokens: inputTokens + 10 },
+      },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, transcript(100));
+  fs.writeFileSync(second, transcript(101));
+
+  await assert.rejects(
+    syncDatabase(defaultOptions({ db, paths: [first, second] })),
+    /Conflicting stored usage event/,
+  );
 });
 
 test("syncDatabase reuses persisted Codex parent metadata for a child-only import", async () => {

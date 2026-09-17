@@ -303,12 +303,26 @@ public struct SubscriptionWindow: Decodable, Equatable, Sendable, Identifiable {
     }
 }
 
+public struct ReportReceipt: Decodable, Equatable, Sendable {
+    public var contractVersion: Int
+    public var receiptId: String
+    public var reportDigest: String?
+    public var sourceManifestDigest: String?
+    public var eventSetDigest: String?
+    public var runtimeId: String?
+    public var syncRunId: Int?
+}
+
 public struct SummaryResponse: Decodable, Equatable, Sendable {
     public var contractVersion: Int
     public var calendarTimeZone: String?
     public var usageProfile: UsageProfile?
     public var costSemantics: String?
     public var generatedAt: Date?
+    public var committedAt: Date?
+    public var dataThrough: Date?
+    public var servedAt: Date?
+    public var receipt: ReportReceipt?
     public var apiEquivalentCostUSD: Double?
     public var billedCostUSD: Double?
     public var subscriptionWindows: [SubscriptionWindow]
@@ -317,6 +331,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
     public var daily: [DailySpendPoint]
     public var providerModelEffortDaily: [ProviderModelEffortDailyGroup]
     public var configurationRevision: String?
+    public var pricingRevision: String?
     public var pricingBasis: String?
     public var pricingStale: Bool?
     public var sync: SyncInfo
@@ -384,6 +399,10 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         usageProfile: UsageProfile? = nil,
         costSemantics: String? = nil,
         generatedAt: Date? = nil,
+        committedAt: Date? = nil,
+        dataThrough: Date? = nil,
+        servedAt: Date? = nil,
+        receipt: ReportReceipt? = nil,
         apiEquivalentCostUSD: Double? = nil,
         billedCostUSD: Double? = nil,
         subscriptionWindows: [SubscriptionWindow] = [],
@@ -392,6 +411,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         daily: [DailySpendPoint] = [],
         providerModelEffortDaily: [ProviderModelEffortDailyGroup] = [],
         configurationRevision: String? = nil,
+        pricingRevision: String? = nil,
         pricingBasis: String? = nil,
         pricingStale: Bool? = nil,
         budget: BudgetInfo? = nil,
@@ -402,6 +422,10 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         self.usageProfile = usageProfile
         self.costSemantics = costSemantics
         self.generatedAt = generatedAt
+        self.committedAt = committedAt
+        self.dataThrough = dataThrough
+        self.servedAt = servedAt
+        self.receipt = receipt
         self.apiEquivalentCostUSD = apiEquivalentCostUSD
         self.billedCostUSD = billedCostUSD
         self.subscriptionWindows = subscriptionWindows
@@ -410,6 +434,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         self.daily = daily
         self.providerModelEffortDaily = providerModelEffortDaily
         self.configurationRevision = configurationRevision
+        self.pricingRevision = pricingRevision
         self.pricingBasis = pricingBasis
         self.pricingStale = pricingStale
         serverBudget = budget
@@ -418,11 +443,12 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case contractVersion
-        case generatedAt, calendarTimeZone, usageProfile, costSemantics
+        case generatedAt, committedAt, dataThrough, servedAt, receipt
+        case calendarTimeZone, usageProfile, costSemantics
         case apiEquivalentCostUsd, billedCostUsd, subscriptionWindows, total, currentMonth, daily
         case budget
         case providerModelEffortDaily
-        case configurationRevision, pricingBasis, pricingStale
+        case configurationRevision, pricingRevision, pricingBasis, pricingStale
     }
 
     public init(from decoder: Decoder) throws {
@@ -436,6 +462,10 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
             )
         }
         generatedAt = try values.decodeIfPresent(String.self, forKey: .generatedAt).flatMap(Self.parseDate)
+        committedAt = try values.decodeIfPresent(String.self, forKey: .committedAt).flatMap(Self.parseDate)
+        dataThrough = try values.decodeIfPresent(String.self, forKey: .dataThrough).flatMap(Self.parseDate)
+        servedAt = try values.decodeIfPresent(String.self, forKey: .servedAt).flatMap(Self.parseDate)
+        receipt = try values.decodeIfPresent(ReportReceipt.self, forKey: .receipt)
         calendarTimeZone = try values.decodeIfPresent(String.self, forKey: .calendarTimeZone)
         usageProfile = try values.decodeIfPresent(UsageProfile.self, forKey: .usageProfile)
         costSemantics = try values.decodeIfPresent(String.self, forKey: .costSemantics)
@@ -447,6 +477,7 @@ public struct SummaryResponse: Decodable, Equatable, Sendable {
         daily = try values.decodeIfPresent([DailySpendPoint].self, forKey: .daily) ?? []
         providerModelEffortDaily = try values.decodeIfPresent([ProviderModelEffortDailyGroup].self, forKey: .providerModelEffortDaily) ?? []
         configurationRevision = try values.decodeIfPresent(String.self, forKey: .configurationRevision)
+        pricingRevision = try values.decodeIfPresent(String.self, forKey: .pricingRevision)
         pricingBasis = try values.decodeIfPresent(String.self, forKey: .pricingBasis)
         pricingStale = try values.decodeIfPresent(Bool.self, forKey: .pricingStale)
         serverBudget = try values.decodeIfPresent(BudgetInfo.self, forKey: .budget)

@@ -725,6 +725,111 @@ test("owned but unsupported token usage records fail closed without poisoning la
   assert.equal(processLine.checkpoint().usageFormat, "token-usage-record");
 });
 
+test("Codex token usage records deduplicate beyond the checkpoint window", () => {
+  const sourceLabel = "codex-long-dedup-fixture";
+  const sessionId = "01a07682-5e9a-72d0-b128-35db975c5157";
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), sourceLabel);
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-09-06T12:00:00.000Z",
+    payload: { id: sessionId, cwd: "/tmp/long-dedup" },
+  }), 1);
+  const record = (responseId, lineNo, timestamp = null) => JSON.stringify({
+    type: "token_usage_record",
+    timestamp: timestamp || `2026-09-06T12:${String(Math.floor(lineNo / 60) % 60).padStart(2, "0")}:${String(lineNo % 60).padStart(2, "0")}.000Z`,
+    payload: {
+      thread_id: sessionId,
+      response_id: responseId,
+      usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 110 },
+    },
+  });
+
+  const firstTimestamp = "2026-09-06T12:00:02.000Z";
+  processLine(record("resp-first", 2, firstTimestamp), 2);
+  for (let index = 0; index < CLAUDE_REQUEST_CHECKPOINT_LIMIT; index += 1) {
+    processLine(record(`resp-${index}`, index + 3), index + 3);
+  }
+  processLine(record("resp-first", CLAUDE_REQUEST_CHECKPOINT_LIMIT + 3, firstTimestamp), CLAUDE_REQUEST_CHECKPOINT_LIMIT + 3);
+
+  assert.equal(report.total.requests, CLAUDE_REQUEST_CHECKPOINT_LIMIT + 1);
+  assert.equal(report.sources.duplicateUsageEvents, 1);
+  assert.equal(processLine.checkpoint().recentUsageResponses.length, CLAUDE_REQUEST_CHECKPOINT_LIMIT);
+});
+
+test("Codex token usage records reject a conflicting response ID", () => {
+  const sourceLabel = "codex-conflicting-dedup-fixture";
+  const sessionId = "01a07682-5e9a-72d0-b128-35db975c5158";
+  const report = newReport();
+  const processLine = createLineProcessor(report, defaultOptions(), sourceLabel);
+  processLine(JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-09-06T12:00:00.000Z",
+    payload: { id: sessionId, cwd: "/tmp/conflicting-dedup" },
+  }), 1);
+  const tokenRecord = (inputTokens) => JSON.stringify({
+    type: "token_usage_record",
+    timestamp: "2026-09-06T12:00:01.000Z",
+    payload: {
+      thread_id: sessionId,
+      response_id: "resp-conflict",
+      usage: { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 10, total_tokens: inputTokens + 10 },
+    },
+  });
+  processLine(tokenRecord(100), 2);
+
+  assert.throws(() => processLine(tokenRecord(101), 3), /Conflicting Codex usage event/);
+  assert.equal(report.total.requests, 1);
+  assert.equal(report.sources.conflictingUsageEvents, 1);
+});
+
+test("Codex parser checkpoint preserves response payload identity across appends", () => {
+  const sourceLabel = "codex-checkpoint-identity-fixture";
+  const sessionId = "01a07682-5e9a-72d0-b128-35db975c5159";
+  const setup = (report, checkpoint = null) => {
+    const processLine = createLineProcessor(report, defaultOptions({ parserCheckpoint: checkpoint }), sourceLabel);
+    if (!checkpoint) {
+      processLine(JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-09-06T12:00:00.000Z",
+        payload: { id: sessionId, cwd: "/tmp/checkpoint-identity" },
+      }), 1);
+      processLine(JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-09-06T12:00:00.500Z",
+        payload: { cwd: "/tmp/checkpoint-identity", model: "gpt-5.6-luna" },
+      }), 2);
+    }
+    return processLine;
+  };
+  const record = (inputTokens) => JSON.stringify({
+    type: "token_usage_record",
+    timestamp: "2026-09-06T12:00:01.000Z",
+    payload: {
+      thread_id: sessionId,
+      response_id: "resp-checkpoint-shared",
+      usage: { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 10, total_tokens: inputTokens + 10 },
+    },
+  });
+
+  const firstReport = newReport();
+  const first = setup(firstReport);
+  first(record(100), 3);
+  const checkpoint = first.checkpoint();
+  assert.match(checkpoint.recentUsageResponses[0].payloadHash, /^[a-f0-9]{64}$/);
+
+  const duplicateReport = newReport();
+  const duplicate = setup(duplicateReport, checkpoint);
+  duplicate(record(100), 4);
+  assert.equal(duplicateReport.total.requests, 0);
+  assert.equal(duplicateReport.sources.duplicateUsageEvents, 1);
+
+  const conflictReport = newReport();
+  const conflict = setup(conflictReport, checkpoint);
+  assert.throws(() => conflict(record(101), 4), /Conflicting Codex usage event/);
+  assert.equal(conflictReport.sources.conflictingUsageEvents, 1);
+});
+
 test("Codex parser checkpoint fails closed for forks and incompatible identities", () => {
   const sourceLabel = "codex-checkpoint-safety-fixture";
   const report = newReport();
@@ -776,7 +881,7 @@ test("Codex parser checkpoint fails closed for forks and incompatible identities
         codexParserCheckpoint: {
           ...checkpoint,
           usageFormat: "token-usage-record",
-          recentUsageResponseIds: [""],
+          recentUsageResponses: [{ responseId: "", payloadHash: "invalid" }],
         },
       }),
       sourceLabel,
@@ -786,7 +891,7 @@ test("Codex parser checkpoint fails closed for forks and incompatible identities
 
   const legacyCheckpoint = { ...checkpoint, version: 1 };
   delete legacyCheckpoint.usageFormat;
-  delete legacyCheckpoint.recentUsageResponseIds;
+  delete legacyCheckpoint.recentUsageResponses;
   assert.throws(
     () => createLineProcessor(
       newReport(),

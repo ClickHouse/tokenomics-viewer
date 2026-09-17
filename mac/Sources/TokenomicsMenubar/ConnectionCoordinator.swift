@@ -215,14 +215,21 @@ public final class ConnectionCoordinator: ObservableObject {
 
             guard isCurrent(generation) else { return }
             var next = try await client.fetchSummary(at: selected)
+            var receiptProbe = syncSnapshot
             if let syncSnapshot {
                 next.sync = SyncInfo(state: syncSnapshot.state, available: syncSnapshot.available, error: syncSnapshot.error)
             } else {
                 if let sync = try? await client.probeSync(at: selected) {
+                    receiptProbe = sync
                     next.sync = SyncInfo(state: sync.state, available: sync.available, error: sync.error)
                 } else if let syncFailureMessage {
                     next.sync = SyncInfo(state: .failed, error: syncFailureMessage)
                 }
+            }
+            if let summaryReceipt = next.receipt?.receiptId,
+               let syncReceipt = receiptProbe?.reportReceiptId,
+               summaryReceipt != syncReceipt {
+                throw EndpointError.network("Summary and sync status refer to different report snapshots.")
             }
             if let syncFailureMessage, next.sync.state != .running {
                 next.sync = SyncInfo(state: .failed, error: syncFailureMessage)

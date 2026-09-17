@@ -7,6 +7,7 @@ const Path = require("node:path");
 const test = require("node:test");
 const { once } = require("node:events");
 const { RUNTIME_ID } = require("../lib/core/runtime-identity");
+const { attachReportReceipt, dataThrough } = require("../lib/core/report-receipt");
 const { newReport, startWebServer, syncDatabase } = require("../app");
 const {
   MAX_CONFIGURATION_BODY_BYTES,
@@ -16,6 +17,51 @@ const {
   isLoopbackHost,
 } = require("../lib/web-server");
 const { defaultOptions } = require("./support/fixtures");
+
+test("report receipt identity is stable across publication metadata", () => {
+  const report = newReport();
+  report.provenance = {
+    generationId: "generation-1",
+    eventSetDigest: "event-set-1",
+    sourceManifestDigest: "manifest-1",
+    dataThrough: "2026-09-17T11:59:59.000Z",
+    codexUsageDerivationComplete: true,
+  };
+  report.daily["2026-09-17"] = { requests: 1, input: 100 };
+  const first = attachReportReceipt(report, {
+    committedAt: "2026-09-17T12:00:00.000Z",
+    runtimeId: "runtime-a",
+    syncRunId: 1,
+  });
+  const republished = attachReportReceipt(report, {
+    committedAt: "2026-09-17T12:01:00.000Z",
+    runtimeId: "runtime-b",
+    syncRunId: 2,
+  });
+  const changed = newReport();
+  Object.assign(changed, report);
+  changed.daily = { "2026-09-17": { requests: 1, input: 101 } };
+  const changedReceipt = attachReportReceipt(changed, {
+    committedAt: "2026-09-17T12:02:00.000Z",
+  });
+
+  assert.equal(first.receipt.receiptId, republished.receipt.receiptId);
+  assert.notEqual(first.receipt.committedAt, republished.receipt.committedAt);
+  assert.notEqual(first.receipt.runtimeId, republished.receipt.runtimeId);
+  assert.notEqual(first.receipt.receiptId, changedReceipt.receipt.receiptId);
+});
+
+test("report receipt data-through uses the last observed event instead of the end of an open day", () => {
+  const report = newReport();
+  report.daily["2026-09-17"] = { requests: 1, input: 100 };
+  report.sessions.push({
+    startedAt: "2026-09-17T12:00:00.000Z",
+    finishedAt: "2026-09-17T12:34:56.000Z",
+  });
+
+  assert.equal(dataThrough(report), "2026-09-17T12:34:56.000Z");
+  assert.equal(attachReportReceipt(report).receipt.dataThrough, "2026-09-17T12:34:56.000Z");
+});
 
 test("web server serves stored SQLite summary and sessions", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-web-test-"));
@@ -55,6 +101,12 @@ test("web server serves stored SQLite summary and sessions", async () => {
     assert.equal(summary.total.output, 1_000_000);
     assert.equal(summary.topModels[0].name, "gpt-5.4-mini");
     assert.equal(summary.timeline, undefined);
+    assert.match(summary.receipt.receiptId, /^[a-f0-9]{64}$/);
+    assert.equal(summary.generatedAt, summary.committedAt);
+    assert.equal(summary.dataThrough, "2026-07-05T00:00:01.000Z");
+    assert.match(summary.servedAt, /^\d{4}-\d{2}-\d{2}T/);
+    const syncStatus = await fetch(`${base}/api/sync`).then((response) => response.json());
+    assert.equal(syncStatus.sync.reportReceiptId, summary.receipt.receiptId);
 
     const timelineJavascript = await fetch(`${base}/timeline.js`);
     assert.equal(timelineJavascript.status, 200);
@@ -811,9 +863,90 @@ test("sync controller publishes structured progress and a bounded run result", a
     changedSources: 3,
     skippedSources: 6,
     sessions: 3,
+    reportReceiptId: null,
+    driftClassification: "stable",
+    closedDayAdditions: 0,
   });
   assert.ok(snapshots.some((snapshot) => snapshot.progress?.completedSources === 1));
   assert.equal(snapshots.at(-1).state, "succeeded");
+});
+
+test("sync controller rejects closed-day decreases and preserves the last-good report", async () => {
+  const previous = newReport();
+  previous.marker = "last-good";
+  previous.daily["2026-09-01"] = { requests: 2, input: 20 };
+  const candidate = newReport();
+  candidate.marker = "regressed";
+  candidate.daily["2026-09-01"] = { requests: 1, input: 10 };
+  const cache = createReportCache(async () => previous, previous);
+  const controller = createSyncController({
+    reportCache: cache,
+    options: { dbEngine: "sqlite" },
+    now: () => new Date("2026-09-17T12:00:00.000Z"),
+    syncDatabase: async () => candidate,
+  });
+
+  controller.start();
+  const status = await controller.waitForIdle();
+
+  assert.equal(status.state, "failed");
+  assert.match(status.error, /Closed-day usage drift rejected/);
+  assert.equal((await cache.get()).marker, "last-good");
+});
+
+test("sync controller rejects closed-day model reattribution even when daily totals stay equal", async () => {
+  const previous = newReport();
+  previous.marker = "last-good";
+  previous.daily["2026-09-01"] = { requests: 1, input: 10 };
+  previous.providerModelEffortDaily.openai = {
+    "gpt-5.6-luna": { max: { "2026-09-01": { requests: 1, input: 10 } } },
+  };
+  const candidate = newReport();
+  candidate.marker = "reattributed";
+  candidate.daily["2026-09-01"] = { requests: 1, input: 10 };
+  candidate.providerModelEffortDaily.openai = {
+    "gpt-5.6-sol": { max: { "2026-09-01": { requests: 1, input: 10 } } },
+  };
+  const cache = createReportCache(async () => previous, previous);
+  const controller = createSyncController({
+    reportCache: cache,
+    options: { dbEngine: "sqlite" },
+    now: () => new Date("2026-09-17T12:00:00.000Z"),
+    syncDatabase: async () => candidate,
+  });
+
+  controller.start();
+  const status = await controller.waitForIdle();
+
+  assert.equal(status.state, "failed");
+  assert.match(status.error, /provider-model-effort:openai\/gpt-5\.6-luna\/max/);
+  assert.equal((await cache.get()).marker, "last-good");
+});
+
+test("sync controller permits an explicit Codex derivation rebuild to correct closed days", async () => {
+  const previous = newReport();
+  previous.marker = "stale-derivation";
+  previous.provenance = { codexUsageDerivationComplete: false };
+  previous.daily["2026-09-01"] = { requests: 2, input: 20 };
+  const candidate = newReport();
+  candidate.marker = "rebuilt";
+  candidate.provenance = { codexUsageDerivationComplete: true };
+  candidate.daily["2026-09-01"] = { requests: 1, input: 10 };
+  const cache = createReportCache(async () => previous, previous);
+  const controller = createSyncController({
+    reportCache: cache,
+    options: { dbEngine: "sqlite" },
+    now: () => new Date("2026-09-17T12:00:00.000Z"),
+    syncDatabase: async () => candidate,
+  });
+
+  controller.start();
+  const status = await controller.waitForIdle();
+
+  assert.equal(status.state, "succeeded");
+  assert.equal(status.result.driftClassification, "derivation-rebuild");
+  assert.equal(status.result.closedDayAdditions, 0);
+  assert.equal((await cache.get()).marker, "rebuilt");
 });
 
 test("sync event stream sends an initial snapshot and releases its listener", async () => {

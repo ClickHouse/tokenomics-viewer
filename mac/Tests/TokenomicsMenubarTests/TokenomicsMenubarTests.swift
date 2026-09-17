@@ -494,6 +494,36 @@ final class SummaryDecodingTests: XCTestCase {
         XCTAssertTrue(response.providerModelEffortDaily.isEmpty)
     }
 
+    func testDecodesReportReceiptAndSnapshotTimestamps() throws {
+        let json = """
+        {
+          "contractVersion": 1,
+          "generatedAt": "2026-09-17T12:00:00.000Z",
+          "committedAt": "2026-09-17T12:00:00.000Z",
+          "dataThrough": "2026-09-17T11:59:59.000Z",
+          "servedAt": "2026-09-17T12:00:01.000Z",
+          "pricingRevision": "pricing-2026-09",
+          "receipt": {
+            "contractVersion": 1,
+            "receiptId": "receipt-abc",
+            "reportDigest": "report-digest",
+            "sourceManifestDigest": "manifest-digest",
+            "eventSetDigest": "event-digest",
+            "runtimeId": "runtime-abc",
+            "syncRunId": 7
+          }
+        }
+        """
+        let response = try JSONDecoder().decode(SummaryResponse.self, from: Data(json.utf8))
+
+        XCTAssertEqual(response.receipt?.receiptId, "receipt-abc")
+        XCTAssertEqual(response.receipt?.runtimeId, "runtime-abc")
+        XCTAssertEqual(response.receipt?.syncRunId, 7)
+        XCTAssertEqual(response.pricingRevision, "pricing-2026-09")
+        XCTAssertEqual(response.generatedAt, response.committedAt)
+        XCTAssertLessThan(try XCTUnwrap(response.dataThrough), try XCTUnwrap(response.servedAt))
+    }
+
     func testProviderDailyGroupsDecodeAndAggregateByProviderForTodayAndMonthToDate() throws {
         let json = """
         {
@@ -743,6 +773,27 @@ final class CoordinatorSyncTests: XCTestCase {
             XCTFail("expected syncing without a last-good payload")
         }
         coordinator.stop()
+    }
+
+    func testReceiptMismatchRejectsMixedSummarySnapshot() async throws {
+        let suiteName = "TokenomicsMenubarTests.receipt-mismatch"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        preferences.automaticSyncEnabled = false
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: ReceiptMismatchClient(),
+            launcher: FailingLauncher()
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertNil(coordinator.payload)
+        XCTAssertNil(coordinator.lastGoodPayload)
+        XCTAssertTrue(coordinator.lastErrorMessage?.contains("different report snapshots") == true)
     }
 
     func testUnavailableStartsLauncherAutomatically() async throws {
@@ -1026,6 +1077,29 @@ private final class RunningZeroClient: TokenomicsHTTPClient, @unchecked Sendable
     func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
         SummaryResponse(currentMonth: UsagePeriod(amountUSD: 0), daily: [DailySpendPoint(date: "2026-08-03", amountUSD: 0)], sync: SyncInfo(state: .running))
     }
+}
+
+private final class ReceiptMismatchClient: TokenomicsHTTPClient, @unchecked Sendable {
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        SyncProbe(state: .succeeded, reportReceiptId: "receipt-sync")
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        SummaryResponse(
+            receipt: ReportReceipt(
+                contractVersion: 1,
+                receiptId: "receipt-summary",
+                reportDigest: nil,
+                sourceManifestDigest: nil,
+                eventSetDigest: nil,
+                runtimeId: nil,
+                syncRunId: nil
+            ),
+            currentMonth: UsagePeriod(amountUSD: 999)
+        )
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {}
 }
 
 @MainActor
