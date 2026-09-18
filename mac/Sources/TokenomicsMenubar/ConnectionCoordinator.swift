@@ -1,9 +1,15 @@
 import AppKit
 import Combine
 import Foundation
+import OSLog
 
 @MainActor
 public final class ConnectionCoordinator: ObservableObject {
+    private static let logger = Logger(
+        subsystem: "com.tokenomics.viewer.menubar",
+        category: "connection"
+    )
+
     @Published public private(set) var state: ConnectionState = .finding
     @Published public private(set) var payload: SummaryResponse?
     @Published public private(set) var lastGoodPayload: SummaryResponse?
@@ -33,9 +39,7 @@ public final class ConnectionCoordinator: ObservableObject {
         preferences: PreferencesStore = PreferencesStore(),
         client: any TokenomicsHTTPClient = URLSessionTokenomicsClient(),
         launcher: any TokenomicsLauncher = DirectTokenomicsLauncher(),
-        launcherConfigurationResolver: @escaping @MainActor (String) -> PersistedLauncherConfiguration? = {
-            LauncherConfigurationStore.resolveConfiguration(fallbackPath: $0)
-        }
+        launcherConfigurationResolver: @escaping @MainActor (String) -> PersistedLauncherConfiguration? = { _ in nil }
     ) {
         self.preferences = preferences
         self.client = client
@@ -182,6 +186,10 @@ public final class ConnectionCoordinator: ObservableObject {
     }
 
     private func runRefresh(generation: Int, triggerSync: Bool) async {
+        let startedAt = Date()
+        Self.logger.notice(
+            "refresh_started generation=\(generation) port=\(self.preferences.preferredPort) trigger_sync=\(triggerSync)"
+        )
         isRefreshing = true
         defer {
             if generation == operationGeneration { isRefreshing = false }
@@ -197,6 +205,9 @@ public final class ConnectionCoordinator: ObservableObject {
             var syncSnapshot: SyncProbe?
             var syncFailureMessage: String?
             let initialSync = try await client.probeSync(at: selected)
+            Self.logger.notice(
+                "sync_observed generation=\(generation) port=\(selected.port) state=\(initialSync.state.rawValue, privacy: .public) report_ready=\(initialSync.reportReady)"
+            )
             if !initialSync.reportReady {
                 payload = nil
                 lastGoodPayload = nil
@@ -236,19 +247,32 @@ public final class ConnectionCoordinator: ObservableObject {
             }
             guard isCurrent(generation) else { return }
             apply(next)
+            let durationMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
+            Self.logger.notice(
+                "refresh_completed generation=\(generation) port=\(selected.port) state=\(next.sync.state.rawValue, privacy: .public) duration_ms=\(durationMilliseconds)"
+            )
         } catch is CancellationError {
             return
         } catch let error as LauncherError {
             guard isCurrent(generation) else { return }
+            Self.logger.error(
+                "refresh_failed generation=\(generation) phase=launcher error=\(Self.message(for: error), privacy: .public)"
+            )
             clearConnectionCache()
             launcherOutput = Self.launcherOutput(for: error)
             state = .startFailure(message: error.localizedDescription, output: launcherOutput)
             lastErrorMessage = error.localizedDescription
         } catch let error as EndpointError {
             guard isCurrent(generation) else { return }
+            Self.logger.error(
+                "refresh_failed generation=\(generation) phase=endpoint error=\(Self.message(for: error), privacy: .public)"
+            )
             handle(error)
         } catch {
             guard isCurrent(generation) else { return }
+            Self.logger.error(
+                "refresh_failed generation=\(generation) phase=unexpected error=\(Self.message(for: error), privacy: .public)"
+            )
             handle(.network(Self.message(for: error)))
         }
     }
@@ -372,7 +396,10 @@ public final class ConnectionCoordinator: ObservableObject {
         let deadline = Date().addingTimeInterval(120)
         while Date() < deadline {
             guard isCurrent(generation) else { throw CancellationError() }
-            let status = try await client.probeSync(at: endpoint)
+            guard let status = try await probeSyncWhileWaiting(at: endpoint, phase: "triggered_sync") else {
+                try await Task.sleep(for: .milliseconds(500))
+                continue
+            }
             switch status.state {
             case .succeeded:
                 return status
@@ -394,7 +421,10 @@ public final class ConnectionCoordinator: ObservableObject {
         let deadline = Date().addingTimeInterval(30 * 60)
         while Date() < deadline {
             guard isCurrent(generation) else { throw CancellationError() }
-            let status = try await client.probeSync(at: endpoint)
+            guard let status = try await probeSyncWhileWaiting(at: endpoint, phase: "initial_report") else {
+                try await Task.sleep(for: .milliseconds(500))
+                continue
+            }
             if status.reportReady { return status }
             if status.state == .failed {
                 throw EndpointError.network(status.error ?? "The backend refresh failed")
@@ -402,6 +432,28 @@ public final class ConnectionCoordinator: ObservableObject {
             try await Task.sleep(for: .milliseconds(500))
         }
         throw EndpointError.timeout
+    }
+
+    /// Once a sync has been observed or accepted, the backend may temporarily
+    /// stop servicing HTTP while it publishes the next report. Preserve the
+    /// outer operation deadline instead of turning one transient probe failure
+    /// into an Offline state and discarding the last confirmed snapshot.
+    private func probeSyncWhileWaiting(at endpoint: Endpoint, phase: String) async throws -> SyncProbe? {
+        do {
+            return try await client.probeSync(at: endpoint)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as EndpointError {
+            switch error {
+            case .timeout, .network:
+                Self.logger.warning(
+                    "sync_probe_retry phase=\(phase, privacy: .public) port=\(endpoint.port) error=\(Self.message(for: error), privacy: .public)"
+                )
+                return nil
+            default:
+                throw error
+            }
+        }
     }
 
     private func apply(_ next: SummaryResponse) {

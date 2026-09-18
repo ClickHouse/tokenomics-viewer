@@ -887,6 +887,29 @@ final class CoordinatorSyncTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .connected)
     }
 
+    func testInitialReportPublicationSurvivesTransientProbeTimeout() async throws {
+        let suiteName = "TokenomicsMenubarTests.transient-publication-timeout"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        let client = TransientPublishingClient()
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: FailingLauncher()
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(client.probeCount, 4)
+        XCTAssertEqual(client.summaryFetchCount, 1)
+        XCTAssertEqual(coordinator.payload?.currentMonth?.amountUSD, 3)
+        XCTAssertEqual(coordinator.state, .connected)
+        XCTAssertNil(coordinator.lastErrorMessage)
+    }
+
     func testWrongServiceIsNotReplacedByTheLauncher() async throws {
         let suiteName = "TokenomicsMenubarTests.wrong-service"
         let suite = UserDefaults(suiteName: suiteName)!
@@ -916,7 +939,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.launcherPath = "/bin/sh"
         let client = StartableClient()
         let launcher = RecordingLauncher(client: client)
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
         defer { coordinator.stop() }
 
         coordinator.start()
@@ -938,7 +966,8 @@ final class CoordinatorSyncTests: XCTestCase {
         let coordinator = ConnectionCoordinator(
             preferences: preferences,
             client: client,
-            launcher: OutputLauncher(output: "[start] scanning local sessions\n")
+            launcher: OutputLauncher(output: "[start] scanning local sessions\n"),
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
         )
 
         let probe = expectation(description: "startup probes the configured endpoint")
@@ -966,7 +995,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.launcherPath = "/bin/sh"
         let client = StartableClient()
         let launcher = RecordingLauncher(client: client)
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
         defer { coordinator.stop() }
 
         coordinator.start()
@@ -994,7 +1028,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.launcherPath = "/bin/sh"
         let client = PortSwitchClient(availablePorts: [8787])
         let launcher = PortStartingLauncher(client: client)
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
 
         coordinator.start()
         await coordinator.waitForCurrentOperation()
@@ -1023,7 +1062,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.automaticSyncEnabled = false
         preferences.launcherPath = "/bin/sh"
         let client = DisappearingClient()
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: FailingLauncher(),
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
 
         coordinator.start()
         await coordinator.waitForCurrentOperation()
@@ -1257,6 +1301,30 @@ private final class PublishingClient: TokenomicsHTTPClient, @unchecked Sendable 
     }
 
     func triggerSync(at endpoint: Endpoint) async throws { syncRequestCount += 1 }
+}
+
+private final class TransientPublishingClient: TokenomicsHTTPClient, @unchecked Sendable {
+    private(set) var probeCount = 0
+    private(set) var summaryFetchCount = 0
+
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        probeCount += 1
+        switch probeCount {
+        case 1, 2:
+            return SyncProbe(state: .running, reportReady: false)
+        case 3:
+            throw EndpointError.timeout
+        default:
+            return SyncProbe(state: .succeeded, reportReady: true)
+        }
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        summaryFetchCount += 1
+        return SummaryResponse(currentMonth: UsagePeriod(amountUSD: 3), daily: [])
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {}
 }
 
 private final class UnavailableClient: TokenomicsHTTPClient, @unchecked Sendable {
