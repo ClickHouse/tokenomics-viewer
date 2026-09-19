@@ -213,6 +213,18 @@ public final class ConnectionCoordinator: ObservableObject {
                 lastGoodPayload = nil
                 state = .syncing(lastGood: false)
                 syncSnapshot = try await waitForReport(at: selected, generation: generation)
+                if discovery.launched && syncSnapshot?.state == .running {
+                    syncSnapshot = try await waitForLaunchedSync(at: selected, generation: generation)
+                }
+            } else if discovery.launched && initialSync.state == .running {
+                // The launcher starts the backend with --sync. A previous report
+                // may already be publishable, but the single-threaded backend can
+                // stop servicing summary requests while that startup sync runs.
+                // Wait for the owned sync instead of mistaking HTTP starvation for
+                // an offline service or leaving the menu in Starting until the next
+                // periodic refresh.
+                state = .syncing(lastGood: lastGoodPayload != nil)
+                syncSnapshot = try await waitForLaunchedSync(at: selected, generation: generation)
             } else if triggerSync && !discovery.launched {
                 state = .syncing(lastGood: lastGoodPayload != nil)
                 do {
@@ -225,7 +237,16 @@ public final class ConnectionCoordinator: ObservableObject {
             }
 
             guard isCurrent(generation) else { return }
-            var next = try await client.fetchSummary(at: selected)
+            let summaryDeadline = Date().addingTimeInterval(
+                discovery.launched || initialSync.state == .running || !initialSync.reportReady
+                    ? 30 * 60
+                    : 120
+            )
+            var next = try await fetchSummaryWhileWaiting(
+                at: selected,
+                generation: generation,
+                deadline: summaryDeadline
+            )
             var receiptProbe = syncSnapshot
             if let syncSnapshot {
                 next.sync = SyncInfo(state: syncSnapshot.state, available: syncSnapshot.available, error: syncSnapshot.error)
@@ -430,6 +451,52 @@ public final class ConnectionCoordinator: ObservableObject {
                 throw EndpointError.network(status.error ?? "The backend refresh failed")
             }
             try await Task.sleep(for: .milliseconds(500))
+        }
+        throw EndpointError.timeout
+    }
+
+    private func waitForLaunchedSync(at endpoint: Endpoint, generation: Int) async throws -> SyncProbe {
+        let deadline = Date().addingTimeInterval(30 * 60)
+        while Date() < deadline {
+            guard isCurrent(generation) else { throw CancellationError() }
+            guard let status = try await probeSyncWhileWaiting(at: endpoint, phase: "launched_sync") else {
+                try await Task.sleep(for: .milliseconds(500))
+                continue
+            }
+            switch status.state {
+            case .idle, .succeeded:
+                return status
+            case .failed:
+                throw EndpointError.network(status.error ?? "The backend startup sync failed")
+            case .running:
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        throw EndpointError.timeout
+    }
+
+    private func fetchSummaryWhileWaiting(
+        at endpoint: Endpoint,
+        generation: Int,
+        deadline: Date
+    ) async throws -> SummaryResponse {
+        while Date() < deadline {
+            guard isCurrent(generation) else { throw CancellationError() }
+            do {
+                return try await client.fetchSummary(at: endpoint)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as EndpointError {
+                switch error {
+                case .timeout, .network, .httpStatus(503):
+                    Self.logger.warning(
+                        "summary_fetch_retry port=\(endpoint.port) error=\(Self.message(for: error), privacy: .public)"
+                    )
+                    try await Task.sleep(for: .milliseconds(500))
+                default:
+                    throw error
+                }
+            }
         }
         throw EndpointError.timeout
     }
