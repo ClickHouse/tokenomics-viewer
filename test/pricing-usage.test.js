@@ -1082,6 +1082,80 @@ test("GPT-6 Astra uses the official short and long-context rates", () => {
   });
 });
 
+test("GPT-6 Sol and Luna use launch-date short and long-context rates", () => {
+  const usageValue = {
+    input: 1_000_000,
+    cacheCreate30m: 1_000_000,
+    cacheRead: 1_000_000,
+    output: 1_000_000,
+    inputIncludesCacheRead: false,
+  };
+  const before = new Date("2026-09-21T23:59:59.999Z");
+  const launch = new Date("2026-09-22T00:00:00.000Z");
+  const models = {
+    "gpt-6-sol": {
+      short: { input: 2, cacheCreate30m: 2.5, cachedInput: 0.2, output: 10 },
+      long: { input: 4, cacheCreate30m: 5, cachedInput: 0.4, output: 15 },
+    },
+    "gpt-6-luna": {
+      short: { input: 0.1, cacheCreate30m: 0.125, cachedInput: 0.01, output: 0.5 },
+      long: { input: 0.2, cacheCreate30m: 0.25, cachedInput: 0.02, output: 0.75 },
+    },
+  };
+
+  for (const [model, rates] of Object.entries(models)) {
+    assert.equal(pricing.lookupOpenAIPrices(model, usageValue, { openaiContext: "short" }, before), null);
+    assert.equal(pricing.calculateCost("openai", model, usageValue, before, { openaiContext: "short" }).known, false);
+    for (const variant of ["short", "long"]) {
+      const expected = rates[variant];
+      assert.deepEqual(pricing.lookupOpenAIPrices(model, usageValue, { openaiContext: variant }, launch), expected);
+      assert.deepEqual(pricing.lookupOpenAIPrices(`${model}-2026-09-22`, usageValue, { openaiContext: variant }, launch), expected);
+      const cost = pricing.calculateCost("openai", model, usageValue, launch, { openaiContext: variant });
+      assert.equal(cost.known, true);
+      assert.deepEqual({
+        input: cost.breakdown.input,
+        cacheCreate30m: cost.breakdown.cacheCreate30m,
+        cacheRead: cost.breakdown.cacheRead,
+        output: cost.breakdown.output,
+      }, {
+        input: expected.input,
+        cacheCreate30m: expected.cacheCreate30m,
+        cacheRead: expected.cachedInput,
+        output: expected.output,
+      });
+    }
+    assert.deepEqual(pricing.lookupOpenAIPrices(model, simpleUsage(272_000), { openaiContext: "auto" }, launch), rates.short);
+    assert.deepEqual(pricing.lookupOpenAIPrices(model, simpleUsage(272_001), { openaiContext: "auto" }, launch), rates.long);
+  }
+});
+
+test("Claude Opus 5.5 uses its discounted cache-read rate and fast tariff", () => {
+  const usageValue = simpleUsage(1_000_000, 1_000_000);
+  usageValue.cacheCreate5m = 1_000_000;
+  usageValue.cacheCreate1h = 1_000_000;
+  usageValue.cacheRead = 1_000_000;
+  const before = new Date("2026-09-21T23:59:59.999Z");
+  const launch = new Date("2026-09-22T00:00:00.000Z");
+  const expected = { input: 4, cacheCreate5m: 5, cacheCreate1h: 8, cacheRead: 0.2, output: 20 };
+
+  assert.equal(pricing.lookupAnthropicPrices("claude-opus-5-5", before), null);
+  assert.equal(pricing.calculateCost("anthropic", "claude-opus-5-5", usageValue, before).known, false);
+  assert.deepEqual(pricing.lookupAnthropicPrices("claude-opus-5-5", launch), expected);
+  assert.deepEqual(pricing.lookupAnthropicPrices("claude-opus-5-5-20260922", launch), expected);
+  const standard = pricing.calculateCost("anthropic", "claude-opus-5-5", usageValue, launch, { serviceMode: "standard" });
+  const fast = pricing.calculateCost("anthropic", "claude-opus-5-5", usageValue, launch, { serviceMode: "fast" });
+  assert.equal(standard.known, true);
+  assert.equal(standard.amount, 37.2);
+  assert.equal(fast.amount, 74.4);
+  assert.deepEqual({
+    input: standard.breakdown.input,
+    cacheCreate5m: standard.breakdown.cacheCreate5m,
+    cacheCreate1h: standard.breakdown.cacheCreate1h,
+    cacheRead: standard.breakdown.cacheRead,
+    output: standard.breakdown.output,
+  }, expected);
+});
+
 test("unknown providers and models remain unpriced", () => {
   const usageValue = simpleUsage(1_000_000);
 

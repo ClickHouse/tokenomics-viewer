@@ -258,7 +258,7 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
   storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3', value_json = ? WHERE revision = ? AND key = 'pricingRevision'").run(JSON.stringify("packaged-3"), currentRevision);
   storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
   storedBefore.prepare("UPDATE pricing_catalog SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
-  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-3' AND model IN ('gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')").run();
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-3' AND model IN ('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'claude-opus-5-5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')").run();
   const insertLegacy = storedBefore.prepare(`
     INSERT INTO pricing_catalog(
       revision, row_id, provider, model, match_mode, variant,
@@ -297,8 +297,11 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
 
   const migrated = await loadConfiguration(options);
   assert.notEqual(migrated.revision, "packaged-3");
-  assert.equal(migrated.settings.pricingRevision, "packaged-6");
+  assert.equal(migrated.settings.pricingRevision, "packaged-7");
   assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
+  assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-sol"));
+  assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-luna"));
+  assert.ok(migrated.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5-5"));
   const solRows = migrated.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
   assert.equal(solRows.length, 4);
   assert.equal(solRows.filter((row) => row.effectiveUntil === "2026-08-20T23:59:59.999Z").length, 2);
@@ -344,6 +347,37 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
   }
 });
 
+test("SQLite packaged-6 upgrade adds September models without reimport", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-september-models-upgrade-test-"));
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const jsonl = Path.join(tmp, "session.jsonl");
+  fs.writeFileSync(jsonl, "{}\n");
+  const options = defaultOptions({ db, paths: [jsonl] });
+
+  await syncDatabase(options);
+  const storedBefore = new DatabaseSync(db);
+  const sourceBefore = storedBefore.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
+  const revision = storedBefore.prepare("SELECT revision FROM configuration_revisions ORDER BY committed_at_ms DESC LIMIT 1").get().revision;
+  storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = ? AND key = 'pricingRevision'")
+    .run(JSON.stringify("packaged-6"), revision);
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = ? AND model IN ('gpt-6-sol', 'gpt-6-luna', 'claude-opus-5-5')")
+    .run(revision);
+  storedBefore.close();
+
+  const upgraded = await loadConfiguration(options);
+  assert.equal(upgraded.settings.pricingRevision, "packaged-7");
+  for (const model of ["gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"]) {
+    assert.ok(upgraded.prices.some((row) => row.model === model), `${model} added`);
+  }
+  const storedAfter = new DatabaseSync(db);
+  try {
+    assert.deepEqual({ ...storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get() }, { ...sourceBefore });
+    assert.equal(storedAfter.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 2);
+  } finally {
+    storedAfter.close();
+  }
+});
+
 test("SQLite upgrades packaged-5 auto-review pricing without reimport", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-auto-review-upgrade-test-"));
   const db = Path.join(tmp, "tokenomics.sqlite");
@@ -381,7 +415,7 @@ test("SQLite upgrades packaged-5 auto-review pricing without reimport", async ()
 
   const upgraded = await loadConfiguration(options);
   const autoReviewRows = upgraded.prices.filter((row) => row.model === "codex-auto-review");
-  assert.equal(upgraded.settings.pricingRevision, "packaged-6");
+  assert.equal(upgraded.settings.pricingRevision, "packaged-7");
   assert.equal(autoReviewRows.length, 2);
   assert.ok(autoReviewRows.some((row) => row.effectiveUntil === "2026-08-06T23:59:59.999Z" && row.input === 2.5));
   assert.ok(autoReviewRows.some((row) => row.effectiveFrom === "2026-08-07T00:00:00.000Z" && row.input === 0.2));
