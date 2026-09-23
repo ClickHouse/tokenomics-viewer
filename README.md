@@ -467,9 +467,12 @@ necessarily a user request or completed task, and tariff coverage means only
 that the local catalog recognized an event. Without outcome or quality data,
 Tokenomics does not rank effort levels as objectively better or worse.
 
-GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna support separate input,
-cache-write, cache-read, and output rates. Packaged GPT-5.6 Sol prices preserve
-the pre-August 21, 2026 tariff and apply the reduced rate from that date.
+GPT-6 Astra, Sol, and Luna, and GPT-5.6 Sol, Terra, and Luna support separate
+input, cache-write, cache-read, and output rates. GPT-6 Sol and Luna use their
+[official rates](https://developers.openai.com/api/docs/pricing) from September
+22, 2026 UTC; earlier usage of those model IDs stays unpriced. Packaged GPT-5.6
+Sol prices preserve the pre-August 21, 2026 tariff and apply the reduced rate
+from that date.
 Legacy Codex `input_tokens` plus `cached_input_tokens` records are
 treated as total input with cached input as a read subset. Explicit
 `cache_creation_input_tokens` plus `cache_read_input_tokens` records preserve
@@ -480,8 +483,10 @@ For standard pricing, Codex `thread_settings_applied.service_tier=priority`
 applies the documented ChatGPT fast-mode credit multipliers: `2.5x` for
 GPT-6 Astra, GPT-5.6, and GPT-5.5, and `2x` for GPT-5.4
 ([official fast-mode documentation](https://learn.chatgpt.com/docs/agent-configuration/speed)).
-This is deliberately separate from API Priority processing. Missing or unknown
-tiers remain standard-priced instead of silently assuming fast mode. In
+This is deliberately separate from API Priority processing. GPT-6 Sol and Luna
+do not receive a Codex fast credit multiplier until that separate tariff is
+confirmed; the API's Fast-mode multiplier alone does not establish it. Missing
+or unknown tiers remain standard-priced instead of silently assuming fast mode. In
 particular, a forked child rollout that omits its own service tier does not
 inherit the parent's tier, so such local logs can understate workspace billing.
 Custom pricing is used as entered and does not receive these packaged
@@ -490,8 +495,11 @@ multipliers.
 Claude Code `usage.speed` is mapped per request: `fast` is fast mode and
 `standard`/`normal` are standard mode; missing or invalid values remain
 `unknown`. Claude `usage.service_tier` is retained separately and never implies
-fast mode. The packaged catalog prices Claude Opus 5 and Claude Opus 4.8 at the
-same standard rates and applies the same 2x fast tariff to both; other models
+fast mode. The packaged catalog prices Claude Opus 5.5 at its
+[official rates](https://platform.claude.com/docs/en/about-claude/pricing)
+from September 22, 2026 UTC, including its special 5% cache-read rate.
+It prices Claude Opus 5 and Claude Opus 4.8 at the same standard rates and
+applies the documented 2x fast tariff to all three; other models
 stay at their standard catalog rate until an explicit provider tariff is
 verified. Custom pricing is not multiplied by this packaged fast tariff
 ([official Claude Code fast-mode documentation](https://code.claude.com/docs/en/fast-mode)).
