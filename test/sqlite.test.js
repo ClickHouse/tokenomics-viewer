@@ -55,6 +55,8 @@ test("SQLite backend factory creates an empty database and report", () => {
     skippedFiles: 0,
     tokenCountSnapshots: 0,
     skippedTokenCountSnapshots: 0,
+    duplicateUsageEvents: 0,
+    conflictingUsageEvents: 0,
   });
 });
 
@@ -295,7 +297,7 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
 
   const migrated = await loadConfiguration(options);
   assert.notEqual(migrated.revision, "packaged-3");
-  assert.equal(migrated.settings.pricingRevision, "packaged-5");
+  assert.equal(migrated.settings.pricingRevision, "packaged-6");
   assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
   const solRows = migrated.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
   assert.equal(solRows.length, 4);
@@ -336,6 +338,58 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
   try {
     const sourceAfter = storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
     assert.deepEqual({ ...sourceAfter }, { ...sourceBefore });
+    assert.equal(storedAfter.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 2);
+  } finally {
+    storedAfter.close();
+  }
+});
+
+test("SQLite upgrades packaged-5 auto-review pricing without reimport", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-auto-review-upgrade-test-"));
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const jsonl = Path.join(tmp, "session.jsonl");
+  fs.writeFileSync(jsonl, [
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-08-08T00:00:00.000Z",
+      payload: { cwd: "/tmp/project-auto-review-upgrade", model: "codex-auto-review", effort: "high" },
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-08T00:00:01.000Z",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 2_000_000, cached_input_tokens: 1_000_000, output_tokens: 1_000_000 } } },
+    }),
+    "",
+  ].join("\n"));
+  const options = defaultOptions({ db, paths: [jsonl] });
+
+  await syncDatabase(options);
+  const storedBefore = new DatabaseSync(db);
+  const sourceBefore = storedBefore.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
+  const currentRevision = storedBefore.prepare("SELECT revision FROM configuration_revisions ORDER BY committed_at_ms DESC LIMIT 1").get().revision;
+  storedBefore.prepare("UPDATE configuration_revisions SET revision = 'packaged-5' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-5', value_json = ? WHERE revision = ? AND key = 'pricingRevision'").run(JSON.stringify("packaged-5"), currentRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-5' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("UPDATE pricing_catalog SET revision = 'packaged-5' WHERE revision = ?").run(currentRevision);
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-5' AND model = 'codex-auto-review' AND effective_from IS NOT NULL").run();
+  storedBefore.prepare(`
+    UPDATE pricing_catalog
+    SET row_id = 'openai:codex-auto-review:short::', effective_from = NULL, effective_until = NULL
+    WHERE revision = 'packaged-5' AND model = 'codex-auto-review'
+  `).run();
+  storedBefore.close();
+
+  const upgraded = await loadConfiguration(options);
+  const autoReviewRows = upgraded.prices.filter((row) => row.model === "codex-auto-review");
+  assert.equal(upgraded.settings.pricingRevision, "packaged-6");
+  assert.equal(autoReviewRows.length, 2);
+  assert.ok(autoReviewRows.some((row) => row.effectiveUntil === "2026-08-06T23:59:59.999Z" && row.input === 2.5));
+  assert.ok(autoReviewRows.some((row) => row.effectiveFrom === "2026-08-07T00:00:00.000Z" && row.input === 0.2));
+  assert.equal(buildReportFromDatabase(db, options).total.costUsd, 1.42);
+
+  const storedAfter = new DatabaseSync(db);
+  try {
+    assert.deepEqual({ ...storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get() }, { ...sourceBefore });
     assert.equal(storedAfter.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 2);
   } finally {
     storedAfter.close();
@@ -392,7 +446,7 @@ test("SQLite reimports a missing named derivation exactly once", async () => {
     assert.equal(stored.prepare("SELECT fingerprint FROM sources WHERE source_path = ?").get(jsonl).fingerprint, currentFingerprint);
     assert.match(currentFingerprint, new RegExp(`analyticsDerivationVersion=${ANALYTICS_DERIVATION_VERSION}`));
     assert.match(currentFingerprint, new RegExp(`codexUsageDerivationVersion=${CODEX_USAGE_DERIVATION_VERSION}`));
-    assert.equal(stored.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, "1");
+    assert.equal(stored.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, "2");
     stored.prepare("UPDATE sources SET fingerprint = ? WHERE source_path = ?").run(
       currentFingerprint
         .split("|")
@@ -461,6 +515,119 @@ test("SQLite replaces a Codex source when archiving moves the same session", asy
   }
 });
 
+test("SQLite retains disjoint Codex continuation files with the same session id", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-continuation-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const sessionId = "019f5840-0000-7000-8000-000000000011";
+  const session = (timestamp, inputTokens) => [
+    JSON.stringify({ type: "session_meta", timestamp, payload: { id: sessionId, cwd: "/tmp/continuation" } }),
+    JSON.stringify({ type: "turn_context", timestamp, payload: { cwd: "/tmp/continuation", model: "gpt-5.4-mini" } }),
+    JSON.stringify({ type: "event_msg", timestamp, payload: { type: "token_count", info: { last_token_usage: { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 1 } } } }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, session("2026-07-12T10:00:00.000Z", 10));
+  fs.writeFileSync(second, session("2026-07-13T10:00:00.000Z", 100));
+
+  await syncDatabase(defaultOptions({ db, paths: [first] }));
+  const report = await syncDatabase(defaultOptions({ db, paths: [first, second] }));
+
+  assert.equal(report.total.requests, 2);
+  assert.equal(report.total.input, 110);
+  const stored = new DatabaseSync(db);
+  try {
+    assert.deepEqual(
+      stored.prepare("SELECT source_path FROM sources ORDER BY source_path").all().map((row) => row.source_path),
+      [first, second],
+    );
+    assert.deepEqual(
+      stored.prepare("SELECT source_path FROM codex_session_sources WHERE session_id = ? ORDER BY source_path").all(sessionId).map((row) => row.source_path),
+      [first, second],
+    );
+  } finally {
+    stored.close();
+  }
+});
+
+test("SQLite deduplicates identical Codex response IDs across continuation files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-global-dedup-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const sessionId = "019f5840-0000-7000-8000-000000000012";
+  const transcript = (usageTimestamp) => [
+    JSON.stringify({ type: "session_meta", timestamp: "2026-09-01T10:00:00.000Z", payload: { id: sessionId, cwd: "/tmp/global-dedup" } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-09-01T10:00:00.000Z", payload: { cwd: "/tmp/global-dedup", model: "gpt-5.6-luna" } }),
+    JSON.stringify({
+      type: "token_usage_record",
+      timestamp: usageTimestamp,
+      payload: {
+        thread_id: sessionId,
+        response_id: "resp-shared",
+        usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 110 },
+      },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, transcript("2026-09-01T10:00:00.000Z"));
+  fs.writeFileSync(second, transcript("2026-09-01T10:00:01.000Z"));
+
+  const report = await syncDatabase(defaultOptions({ db, paths: [first, second] }));
+
+  assert.equal(report.total.requests, 1);
+  assert.equal(report.sources.duplicateUsageEvents, 1);
+  assert.equal(report.provenance.codexUsageDerivationComplete, true);
+  assert.match(report.provenance.generationId, /^[a-f0-9-]{36}$/);
+  assert.match(report.provenance.committedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const rebuilt = buildReportFromDatabase(db, defaultOptions());
+  assert.equal(rebuilt.provenance.generationId, report.provenance.generationId);
+  assert.equal(rebuilt.provenance.committedAt, report.provenance.committedAt);
+  const unchanged = await syncDatabase(defaultOptions({ db, paths: [first, second] }));
+  assert.equal(unchanged.provenance.generationId, report.provenance.generationId);
+  assert.equal(unchanged.provenance.committedAt, report.provenance.committedAt);
+  const stored = new DatabaseSync(db);
+  try {
+    const rows = stored.prepare("SELECT event_key, payload_hash FROM usage_events ORDER BY source_path").all();
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].event_key, "request:resp-shared");
+    assert.equal(rows[1].event_key, "request:resp-shared");
+    assert.equal(rows[0].payload_hash, rows[1].payload_hash);
+    assert.match(rows[0].payload_hash, /^[a-f0-9]{64}$/);
+  } finally {
+    stored.close();
+  }
+});
+
+test("SQLite rejects conflicting Codex response IDs across continuation files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-global-conflict-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const sessionId = "019f5840-0000-7000-8000-000000000013";
+  const transcript = (inputTokens) => [
+    JSON.stringify({ type: "session_meta", timestamp: "2026-09-01T10:00:00.000Z", payload: { id: sessionId, cwd: "/tmp/global-conflict" } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-09-01T10:00:00.000Z", payload: { cwd: "/tmp/global-conflict", model: "gpt-5.6-luna" } }),
+    JSON.stringify({
+      type: "token_usage_record",
+      timestamp: "2026-09-01T10:00:00.000Z",
+      payload: {
+        thread_id: sessionId,
+        response_id: "resp-conflict",
+        usage: { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 10, total_tokens: inputTokens + 10 },
+      },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, transcript(100));
+  fs.writeFileSync(second, transcript(101));
+
+  await assert.rejects(
+    syncDatabase(defaultOptions({ db, paths: [first, second] })),
+    /Conflicting stored usage event/,
+  );
+});
+
 test("syncDatabase reuses persisted Codex parent metadata for a child-only import", async () => {
   const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-fork-db-test-"));
   const parent = Path.join(tmp, "parent.jsonl");
@@ -526,6 +693,90 @@ test("syncDatabase reuses persisted Codex parent metadata for a child-only impor
     });
   } finally {
     updatedSqlite.close();
+  }
+});
+
+test("syncDatabase stores modern Codex parent_thread_id metadata", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-modern-parent-db-test-"));
+  const child = Path.join(tmp, "child.jsonl");
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const parentSessionId = "019f48d9-4ccc-73c2-bf45-a84e4951347e";
+  const childSessionId = "019f4973-7053-7623-a798-0e4cf81ef014";
+
+  fs.writeFileSync(child, [
+    JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-08-08T19:09:46.579Z",
+      payload: {
+        id: childSessionId,
+        parent_thread_id: parentSessionId,
+        source: { subagent: { thread_spawn: { parent_thread_id: parentSessionId } } },
+        history_mode: "paginated",
+        subagent_history_start_ordinal: 202,
+        cwd: "/tmp/modern-child-project",
+      },
+    }),
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-08-08T19:09:47.000Z",
+      payload: { cwd: "/tmp/modern-child-project", model: "gpt-5-codex" },
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-08T19:09:48.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10 },
+          total_token_usage: { input_tokens: 9_000_100, cached_input_tokens: 8_000_090, output_tokens: 900_010 },
+        },
+      },
+    }),
+    "",
+  ].join("\n"));
+
+  const report = await syncDatabase(defaultOptions({ db, paths: [child] }));
+  assert.equal(report.total.requests, 1);
+  assert.equal(report.total.input, 10);
+  assert.equal(report.total.cacheRead, 90);
+  assert.equal(report.total.output, 10);
+
+  const sqlite = new DatabaseSync(db);
+  try {
+    const stored = sqlite.prepare(`
+      SELECT parent_session_id, source_path
+      FROM codex_sessions
+      WHERE session_id = ?
+    `).get(childSessionId);
+    assert.deepEqual({ ...stored }, {
+      parent_session_id: parentSessionId,
+      source_path: child,
+    });
+
+    sqlite.prepare("UPDATE codex_sessions SET parent_session_id = NULL WHERE session_id = ?").run(childSessionId);
+    const previousDerivationVersion = CODEX_USAGE_DERIVATION_VERSION - 1;
+    sqlite.prepare(`
+      UPDATE sources
+      SET fingerprint = replace(fingerprint, ?, ?)
+      WHERE source_path = ?
+    `).run(
+      `codexUsageDerivationVersion=${CODEX_USAGE_DERIVATION_VERSION}`,
+      `codexUsageDerivationVersion=${previousDerivationVersion}`,
+      child,
+    );
+  } finally {
+    sqlite.close();
+  }
+
+  await syncDatabase(defaultOptions({ db, paths: [child] }));
+  const upgraded = new DatabaseSync(db);
+  try {
+    assert.equal(
+      upgraded.prepare("SELECT parent_session_id FROM codex_sessions WHERE session_id = ?").get(childSessionId).parent_session_id,
+      parentSessionId,
+    );
+  } finally {
+    upgraded.close();
   }
 });
 

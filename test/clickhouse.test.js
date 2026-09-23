@@ -168,6 +168,32 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
     return [...keyed.values()];
   }
 
+  function usageIdentity(row) {
+    if (String(row.event_key || "").startsWith("request:")) {
+      return `request:${row.provider || "unknown"}:${String(row.event_key).slice("request:".length)}`;
+    }
+    return `source:${row.source_path}:${row.event_key || `line:${row.line_no || 0}`}`;
+  }
+
+  function usagePayload(row) {
+    return JSON.stringify([
+      row.provider, row.model, row.project, row.effort,
+      row.service_tier, row.service_mode, row.agent,
+      row.input, row.cache_create_5m, row.cache_create_30m, row.cache_create_1h,
+      row.cache_read, row.output, row.reasoning_output, row.context_window,
+      row.visible_input_chars, row.visible_output_chars, row.visible_total_chars,
+    ]);
+  }
+
+  function globallyDedupedUsageRows(generationId) {
+    const deduped = new Map();
+    for (const row of visibleRows("usage_events", generationId)) {
+      const key = usageIdentity(row);
+      if (!deduped.has(key)) deduped.set(key, row);
+    }
+    return [...deduped.values()];
+  }
+
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     let body = "";
@@ -238,6 +264,18 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
         const table = deleteMatch[1];
         const sourcePath = url.searchParams.get("param_source");
         activeRows[table] = (activeRows[table] || []).filter((row) => row.source_path !== sourcePath);
+      }
+
+      if (
+        query.trim().startsWith("SELECT generation_id, committed_at_ms")
+        && query.includes("FROM import_generations")
+        && query.includes("WHERE generation_id = {generation:String}")
+      ) {
+        const generationId = url.searchParams.get("param_generation");
+        const generation = (activeRows.import_generations || []).find((row) => row.generation_id === generationId);
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        response.end(generation ? `${JSON.stringify(generation)}\n` : "");
+        return;
       }
 
       if (query.includes("FROM import_generations") && query.includes("ORDER BY committed_at_ms DESC")) {
@@ -364,7 +402,7 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
         const generationId = url.searchParams.get("param_generation");
         const rowsBySession = new Map();
         for (const row of visibleRows("codex_session_versions", generationId)) {
-          rowsBySession.set(row.session_id, row);
+          rowsBySession.set(`${row.session_id}\u0000${row.source_path}`, row);
         }
         const rows = [...rowsBySession.values()];
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
@@ -381,9 +419,27 @@ function createClickHouseServer({ failureStatus = null, failureBody = "", failur
       }
 
       response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      if (query.includes("FROM usage_events") && query.includes("GROUP BY GROUPING SETS")) {
+      if (query.includes("duplicate_keys") && query.includes("conflictingUsageEvents")) {
         const generationId = url.searchParams.get("param_generation");
-        const usageRows = visibleRows("usage_events", generationId).length;
+        const groups = new Map();
+        for (const row of visibleRows("usage_events", generationId)) {
+          const key = usageIdentity(row);
+          const group = groups.get(key) || { copies: 0, variants: new Set() };
+          group.copies += 1;
+          group.variants.add(usagePayload(row));
+          groups.set(key, group);
+        }
+        let duplicateUsageEvents = 0;
+        let conflictingUsageEvents = 0;
+        for (const group of groups.values()) {
+          if (group.copies <= 1) continue;
+          duplicateUsageEvents += group.copies - 1;
+          if (group.variants.size > 1) conflictingUsageEvents += 1;
+        }
+        response.end(`${JSON.stringify({ duplicateUsageEvents, conflictingUsageEvents })}\n`);
+      } else if (query.includes("FROM usage_events") && query.includes("GROUP BY GROUPING SETS")) {
+        const generationId = url.searchParams.get("param_generation");
+        const usageRows = globallyDedupedUsageRows(generationId).length;
         response.end(`${JSON.stringify({
           bucket: "total",
           key1: "",
@@ -494,7 +550,7 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -508,6 +564,53 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
       .filter((request) => request.query.trimStart().startsWith("INSERT INTO"));
     assert.equal(stable.revision, upgraded.revision);
     assert.equal(repeatedInserts.length, 0, "completed packaged upgrade must not replay pricing overlays");
+  });
+});
+
+test("ClickHouse packaged-5 upgrade materializes temporal auto-review rows before the revision marker", async () => {
+  const mock = createClickHouseServer();
+  await withServer(mock, async (clickhouseUrl) => {
+    const options = defaultOptions({ dbEngine: "clickhouse", clickhouseUrl, clickhouseDatabase: "tokenomics_auto_review_upgrade_test" });
+    await loadConfiguration(options);
+
+    const legacyRevision = "legacy-packaged-5-auto-review";
+    mock.activeRows.configuration_revisions[0].revision = legacyRevision;
+    for (const row of mock.activeRows.analytics_settings) {
+      row.revision = legacyRevision;
+      if (row.key === "pricingRevision") row.value_json = JSON.stringify("packaged-5");
+    }
+    for (const row of mock.activeRows.configuration_metadata) {
+      row.revision = legacyRevision;
+      row.packaged_revision = "packaged-5";
+    }
+    mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
+      if (row.model !== "codex-auto-review") return [{ ...row, revision: legacyRevision }];
+      if (row.effective_until !== "2026-08-06T23:59:59.999Z") return [];
+      return [{
+        ...row,
+        revision: legacyRevision,
+        row_id: `${row.provider}:${row.model}:${row.variant}`,
+        effective_from: "",
+        effective_until: "",
+      }];
+    });
+
+    const before = mock.requests.length;
+    const upgraded = await loadConfiguration(options);
+    const requests = mock.requests.slice(before);
+    const autoReviewRows = upgraded.prices.filter((row) => row.model === "codex-auto-review");
+
+    assert.equal(autoReviewRows.length, 2);
+    assert.ok(autoReviewRows.some((row) => row.effectiveUntil === "2026-08-06T23:59:59.999Z" && row.input === 2.5));
+    assert.ok(autoReviewRows.some((row) => row.effectiveFrom === "2026-08-07T00:00:00.000Z" && row.input === 0.2));
+    assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
+    const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
+    const marker = requests.findIndex((request) => request.query.startsWith("INSERT INTO configuration_revisions"));
+    assert.ok(usageOverlay >= 0 && marker > usageOverlay);
+
+    const stableStart = mock.requests.length;
+    assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
+    assert.equal(mock.requests.slice(stableStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
   });
 });
 
@@ -563,7 +666,7 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     assert.ok(upgraded.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
     const solRows = upgraded.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
@@ -621,6 +724,16 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
           source_url: "https://developers.openai.com/api/docs/pricing",
         }];
       }
+      if (row.model === "codex-auto-review") {
+        if (row.effective_until !== "2026-08-06T23:59:59.999Z") return [];
+        return [{
+          ...row,
+          revision: legacyRevision,
+          row_id: `${row.provider}:${row.model}:${row.variant}`,
+          effective_from: "",
+          effective_until: "",
+        }];
+      }
       if (!temporalModels.has(row.model)) {
         return [{
           ...row,
@@ -654,7 +767,7 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")));
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
 
     const stableStart = mock.requests.length;
     assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
@@ -667,18 +780,18 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(mock.requests.slice(futureProjectionStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     futureMetadata.pricing_projection_revision = "2";
-    futureMetadata.packaged_revision = "packaged-6";
+    futureMetadata.packaged_revision = "packaged-7";
     const futurePackageStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-6 is newer than packaged-5/);
+    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-7 is newer than packaged-6/);
     assert.equal(mock.requests.slice(futurePackageStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     mock.activeRows.configuration_metadata = mock.activeRows.configuration_metadata
       .filter((row) => row.revision !== upgraded.revision);
     mock.activeRows.analytics_settings.find((row) => (
       row.revision === upgraded.revision && row.key === "pricingRevision"
-    )).value_json = JSON.stringify(`packaged-6:${"e".repeat(32)}`);
+    )).value_json = JSON.stringify(`packaged-7:${"e".repeat(32)}`);
     const futurePublicStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-6:.* is newer than packaged-5/);
+    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-7:.* is newer than packaged-6/);
     assert.equal(mock.requests.slice(futurePublicStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
   });
 });
@@ -710,7 +823,7 @@ test("ClickHouse rebuilds managed overlays when projection metadata is stale", a
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -747,7 +860,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.equal(upgraded.settings.monthlyCostLimitUsd, 321);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
@@ -756,7 +869,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     assert.match(requests[usageOverlay].query, /parseDateTime64BestEffortOrNull\(toString\(raw\.timestamp\)\)/);
     assert.ok(mock.activeRows.configuration_metadata.some((row) => (
       row.revision === upgraded.revision && row.managed_pricing === 1 &&
-      row.packaged_revision === "packaged-5" && row.pricing_projection_revision === "2"
+      row.packaged_revision === "packaged-6" && row.pricing_projection_revision === "2"
     )));
 
     const stableStart = mock.requests.length;
@@ -832,7 +945,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     await loadConfiguration(options);
 
     const legacyRevision = "81fbbf48-6215-419b-bffb-ddd36a1e96d4";
-    const legacyPricingRevision = "packaged-5:fd7377f5073cecef6e9f9b83e190c1c4";
+    const legacyPricingRevision = "packaged-6:fd7377f5073cecef6e9f9b83e190c1c4";
     const historicalUntil = "2026-07-29T23:59:59.999Z";
     const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
     mock.activeRows.configuration_revisions[0].revision = legacyRevision;
@@ -887,7 +1000,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     const rebasedLuna = rebased.prices.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short");
 
     assert.notEqual(rebased.revision, legacyRevision);
-    assert.match(rebased.settings.pricingRevision, /^packaged-5:[0-9a-f]{32}$/);
+    assert.match(rebased.settings.pricingRevision, /^packaged-6:[0-9a-f]{32}$/);
     assert.equal(rebasedLuna.input, 99);
     assert.equal(rebased.prices.some((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z"), false);
     assert.ok(rebaseRequests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
@@ -1037,6 +1150,8 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     assert.match(usageStatsQuery, /'serviceModes'/);
     assert.match(usageStatsQuery, /'agents'/);
     assert.match(usageStatsQuery, /\(provider, model, effort, date_key\)/);
+    assert.match(usageStatsQuery, /_logical_event_key/);
+    assert.match(usageStatsQuery, /LIMIT 1 BY _logical_event_key/);
     assert.equal((usageStatsQuery.match(/FROM usage_events AS raw/g) || []).length, 1);
     assert.doesNotMatch(usageStatsQuery.slice(usageStatsQuery.indexOf("usage_events_with_dimensions AS")), /UNION ALL/);
     assert.equal(mock.inserts.usage_events.reduce((sum, insert) => sum + insert.rows, 0), rows);
@@ -1050,6 +1165,10 @@ test("ClickHouse sync streams usage rows in bounded insert chunks", async () => 
     assert.ok(mock.inserts.usage_events.every((insert) => insert.rows <= 100_000));
     assert.ok(mock.inserts.usage_events.every((insert) => insert.bytes <= 70 * 1024));
     assert.equal(mock.inserts.codex_session_versions.length, 1);
+    const identityQuery = queries.find((query) => query.includes("duplicate_keys") && query.includes("conflictingUsageEvents"));
+    assert.ok(identityQuery);
+    assert.match(identityQuery, /FROM identity_usage_events_active AS raw/);
+    assert.match(identityQuery, /uniqExact\(tuple\(/);
     const storedSession = JSON.parse(mock.inserts.codex_session_versions[0].body.trim());
     assert.equal(storedSession.session_id, "019f4973-7053-7623-a798-0e4cf81ef014");
     assert.equal(storedSession.parent_session_id, "019f48d9-4ccc-73c2-bf45-a84e4951347e");
@@ -1081,6 +1200,104 @@ test("ClickHouse replaces a Codex source when archiving moves the same session",
     assert.equal(report.total.requests, 2);
     assert.deepEqual(mock.visibleRows("sources").map((row) => row.source_path), [archived]);
     assert.equal(mock.visibleRows("usage_events").length, 2);
+  });
+});
+
+test("ClickHouse retains disjoint Codex continuation files with the same session id", async () => {
+  const sessionId = "019f5840-0000-7000-8000-000000000012";
+  const first = createSessionFile({ rows: 2, project: "/tmp/continuation-first", sessionId });
+  const second = createSessionFile({ rows: 3, project: "/tmp/continuation-second", sessionId });
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const base = {
+      dbEngine: "clickhouse",
+      clickhouseDatabase: "tokenomics_continuation_test",
+      clickhouseUrl: url,
+      progress: false,
+    };
+    await syncDatabase(defaultOptions({ ...base, paths: [first] }));
+    const report = await syncDatabase(defaultOptions({ ...base, paths: [first, second] }));
+
+    assert.equal(report.total.requests, 5);
+    assert.deepEqual(mock.visibleRows("sources").map((row) => row.source_path).sort(), [first, second].sort());
+    assert.equal(mock.visibleRows("usage_events").length, 5);
+    assert.equal(mock.visibleRows("codex_session_versions").length, 2);
+  });
+});
+
+test("ClickHouse deduplicates identical Codex response IDs across continuation files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-global-dedup-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const sessionId = "019f5840-0000-7000-8000-000000000014";
+  const transcript = (usageTimestamp) => [
+    JSON.stringify({ type: "session_meta", timestamp: "2026-09-01T10:00:00.000Z", payload: { id: sessionId, cwd: "/tmp/ch-global-dedup" } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-09-01T10:00:00.000Z", payload: { cwd: "/tmp/ch-global-dedup", model: "gpt-5.6-luna" } }),
+    JSON.stringify({
+      type: "token_usage_record",
+      timestamp: usageTimestamp,
+      payload: {
+        thread_id: sessionId,
+        response_id: "resp-shared",
+        usage: { input_tokens: 100, cached_input_tokens: 90, output_tokens: 10, total_tokens: 110 },
+      },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, transcript("2026-09-01T10:00:01.000Z"));
+  fs.writeFileSync(second, transcript("2026-09-01T10:00:02.000Z"));
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const report = await syncDatabase(defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_global_dedup_test",
+      paths: [first, second],
+      progress: false,
+    }));
+
+    assert.equal(report.total.requests, 1);
+    assert.equal(report.sources.duplicateUsageEvents, 1);
+    assert.equal(mock.visibleRows("usage_events").length, 2);
+  });
+});
+
+test("ClickHouse rejects conflicting Codex response IDs across continuation files", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-global-conflict-"));
+  const first = Path.join(tmp, "first.jsonl");
+  const second = Path.join(tmp, "second.jsonl");
+  const sessionId = "019f5840-0000-7000-8000-000000000015";
+  const transcript = (inputTokens) => [
+    JSON.stringify({ type: "session_meta", timestamp: "2026-09-01T10:00:00.000Z", payload: { id: sessionId, cwd: "/tmp/ch-global-conflict" } }),
+    JSON.stringify({ type: "turn_context", timestamp: "2026-09-01T10:00:00.000Z", payload: { cwd: "/tmp/ch-global-conflict", model: "gpt-5.6-luna" } }),
+    JSON.stringify({
+      type: "token_usage_record",
+      timestamp: "2026-09-01T10:00:01.000Z",
+      payload: {
+        thread_id: sessionId,
+        response_id: "resp-conflict",
+        usage: { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 10, total_tokens: inputTokens + 10 },
+      },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(first, transcript(100));
+  fs.writeFileSync(second, transcript(101));
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    await assert.rejects(
+      syncDatabase(defaultOptions({
+        dbEngine: "clickhouse",
+        clickhouseUrl: url,
+        clickhouseDatabase: "tokenomics_global_conflict_test",
+        paths: [first, second],
+        progress: false,
+      })),
+      /Conflicting stored usage events/,
+    );
   });
 });
 
@@ -1189,7 +1406,7 @@ test("ClickHouse fully replays a Codex source once when its parser checkpoint pr
     assert.equal(staleCheckpoint.version, CODEX_PARSER_CHECKPOINT_VERSION);
     staleCheckpoint.version = CODEX_PARSER_CHECKPOINT_VERSION - 1;
     delete staleCheckpoint.usageFormat;
-    delete staleCheckpoint.recentUsageResponseIds;
+    delete staleCheckpoint.recentUsageResponses;
     initialSource.parser_checkpoint = JSON.stringify(staleCheckpoint);
 
     progressEvents.length = 0;
@@ -1242,7 +1459,7 @@ test("ClickHouse refuses a future Codex parser checkpoint without replacing comm
 
     await assert.rejects(
       syncDatabase(options),
-      /checkpoint version 3 is newer than supported version 2/,
+      new RegExp(`checkpoint version ${CODEX_PARSER_CHECKPOINT_VERSION + 1} is newer than supported version ${CODEX_PARSER_CHECKPOINT_VERSION}`),
     );
     assert.equal(mock.visibleRows("sources")[0].import_id, initialImportId);
     assert.equal(mock.visibleRows("usage_events").length, 2);
@@ -2058,12 +2275,20 @@ test("ClickHouse report pins one committed generation across every query", async
   const mock = createClickHouseServer();
   mock.activeRows.import_generations = [{ generation_id: "pinned-generation", committed_at_ms: 7 }];
 
+  let report;
   await withServer(mock, async (url) => {
-    await buildReportFromClickHouse(defaultOptions({
+    report = await buildReportFromClickHouse(defaultOptions({
       clickhouseUrl: url,
       clickhouseDatabase: "tokenomics_committed_views_test",
     }));
   });
+
+  assert.equal(report.provenance.generationId, "pinned-generation");
+  assert.equal(report.provenance.committedAt, "1970-01-01T00:00:00.007Z");
+  const provenanceQuery = mock.requests.find((request) => request.query.includes("eventSetDigest"))?.query;
+  assert.ok(provenanceQuery);
+  assert.match(provenanceQuery, /groupBitXor\(cityHash64\(payload\)\)/);
+  assert.doesNotMatch(provenanceQuery, /groupArray/);
 
   const reportRequests = mock.requests.filter((request) => (
     request.query.includes("import_generation_sources AS manifest")
@@ -2113,7 +2338,7 @@ test("ClickHouse report pins one committed generation across every query", async
   assert.match(usageStatsQuery, /projectQuarterHourlyProviderModels/);
 });
 
-test("ClickHouse manifest query is accepted by the installed clickhouse-local analyzer", async (t) => {
+test("ClickHouse manifest and provenance queries are accepted by the installed clickhouse-local analyzer", async (t) => {
   const mock = createClickHouseServer();
   const home = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-manifest-analyzer-test-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -2148,6 +2373,8 @@ test("ClickHouse manifest query is accepted by the installed clickhouse-local an
 
   const query = mock.requests.find((request) => request.query.includes("uniqExact(source.import_id) AS active_import_count"))?.query;
   assert.ok(query, "generation source query must be captured");
+  const provenanceQuery = mock.requests.find((request) => request.query.includes("eventSetDigest"))?.query;
+  assert.ok(provenanceQuery, "usage provenance query must be captured");
   assert.match(query, /history\.source_path AS source_path/);
   assert.match(query, /history\.import_id AS import_id/);
   assert.match(query, /watermarks\.committed_segment_end AS committed_segment_end/);
@@ -2201,11 +2428,39 @@ test("ClickHouse manifest query is accepted by the installed clickhouse-local an
       file_device String,
       file_inode String
     )`,
+    `CREATE TEMPORARY TABLE usage_events (
+      source_path String,
+      import_id String,
+      segment_end UInt64,
+      line_no UInt64,
+      event_key String,
+      timestamp String,
+      provider String,
+      model String,
+      project String,
+      effort String,
+      service_tier String,
+      service_mode String,
+      agent String,
+      input UInt64,
+      cache_create_5m UInt64,
+      cache_create_30m UInt64,
+      cache_create_1h UInt64,
+      cache_read UInt64,
+      output UInt64,
+      reasoning_output UInt64,
+      context_window UInt64,
+      visible_input_chars UInt64,
+      visible_output_chars UInt64,
+      visible_total_chars UInt64
+    )`,
     "INSERT INTO import_generations VALUES ('analyzer-generation', 7)",
     "INSERT INTO import_generation_checkpoints VALUES (7, 'analyzer-generation', 7, 'analyzer-generation')",
     "INSERT INTO import_generation_sources VALUES ('analyzer-generation', '/tmp/analyzer-session.jsonl', 'analyzer-import', 10, 0)",
     "INSERT INTO sources VALUES ('/tmp/analyzer-session.jsonl', 'analyzer-import', 'fingerprint', '2026-09-03T00:00:00.000Z', 1, 0, 10, 1, '', '', '', '', '')",
+    "INSERT INTO usage_events VALUES ('/tmp/analyzer-session.jsonl', 'analyzer-import', 10, 1, 'request:resp-analyzer', '2026-09-03T00:00:01.000Z', 'openai', 'gpt-5.6-luna', '/tmp', 'medium', 'default', 'standard', 'codex', 10, 0, 0, 0, 5, 2, 0, 128000, 0, 0, 0)",
     query,
+    provenanceQuery,
   ];
   const execution = spawnSync("clickhouse", [
     "local",
@@ -2216,7 +2471,10 @@ test("ClickHouse manifest query is accepted by the installed clickhouse-local an
     timeout: 10_000,
   });
   assert.equal(execution.status, 0, execution.stderr);
-  assert.equal(JSON.parse(execution.stdout.trim()).source_path, "/tmp/analyzer-session.jsonl");
+  const outputRows = execution.stdout.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(outputRows[0].source_path, "/tmp/analyzer-session.jsonl");
+  assert.match(outputRows[1].eventSetDigest, /^[a-f0-9]{64}$/);
+  assert.match(outputRows[1].dataThrough, /^2026-09-03T00:00:01/);
 });
 
 test("ClickHouse legacy header union uses explicit migration-safe column order", async () => {

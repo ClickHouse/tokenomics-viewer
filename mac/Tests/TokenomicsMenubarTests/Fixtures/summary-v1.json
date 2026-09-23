@@ -1,6 +1,10 @@
 {
   "contractVersion": 1,
   "generatedAt": "2026-08-03T12:00:00.000Z",
+  "committedAt": null,
+  "dataThrough": null,
+  "servedAt": "2026-08-03T12:00:00.000Z",
+  "receipt": null,
   "calendarTimeZone": "UTC",
   "usageProfile": {
     "id": "default",
@@ -19,7 +23,9 @@
     "parseErrors": 0,
     "skippedFiles": 0,
     "tokenCountSnapshots": 0,
-    "skippedTokenCountSnapshots": 0
+    "skippedTokenCountSnapshots": 0,
+    "duplicateUsageEvents": 0,
+    "conflictingUsageEvents": 0
   },
   "total": {
     "requests": 0,
@@ -243,6 +249,7 @@
   ],
   "projectDaily": [],
   "configurationRevision": null,
+  "pricingRevision": null,
   "pricingBasis": "standard",
   "regionalMultiplier": 1,
   "pricingStale": false,

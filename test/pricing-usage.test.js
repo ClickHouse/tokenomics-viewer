@@ -16,6 +16,23 @@ const {
 } = require("../app");
 const { defaultOptions, roundCosts, simpleUsage } = require("./support/fixtures");
 
+test("Codex parent identity supports legacy and modern session metadata", () => {
+  const legacyParent = "019f48d9-4ccc-73c2-bf45-a84e4951347e";
+  const modernParent = "019f4973-7053-7623-a798-0e4cf81ef014";
+
+  assert.equal(usage.codexParentSessionId({
+    forked_from_id: legacyParent,
+    parent_thread_id: modernParent,
+  }), legacyParent);
+  assert.equal(usage.codexParentSessionId({
+    forked_from_id: "invalid",
+    parent_thread_id: modernParent,
+  }), modernParent);
+  assert.equal(usage.codexParentSessionId({
+    source: { subagent: { thread_spawn: { parent_thread_id: modernParent } } },
+  }), modernParent);
+});
+
 test("aggregates Claude by model, deduplicates requestId, and prices cache buckets", () => {
   const report = newReport();
   const processLine = createLineProcessor(report, defaultOptions(), "claude-fixture");
@@ -1179,21 +1196,29 @@ test("missing or unknown OpenAI service tiers stay at standard pricing", () => {
   assert.equal(unknown.amount, standard.amount, "unknown tiers must not silently become fast");
 });
 
-test("codex-auto-review is priced at the standard OpenAI rate even with priority context", () => {
-  const cost = pricing.calculateCost(
+test("codex-auto-review preserves its August 7 price cut and ignores priority context", () => {
+  const usageValue = {
+    ...simpleUsage(1_000_000, 1_000_000),
+    cacheRead: 1_000_000,
+    inputIncludesCacheRead: false,
+  };
+  const historical = pricing.calculateCost(
     "openai",
     "codex-auto-review",
-    {
-      ...simpleUsage(1_000_000, 1_000_000),
-      cacheRead: 1_000_000,
-      inputIncludesCacheRead: false,
-    },
-    new Date("2026-07-15T00:00:00.000Z"),
+    usageValue,
+    new Date("2026-08-06T23:59:59.999Z"),
+    { ...pricingOptions, serviceTier: "priority" },
+  );
+  const current = pricing.calculateCost(
+    "openai",
+    "codex-auto-review",
+    usageValue,
+    new Date("2026-08-07T00:00:00.000Z"),
     { ...pricingOptions, serviceTier: "priority" },
   );
 
-  assert.equal(cost.known, true);
-  assert.deepEqual(roundCosts(cost.breakdown), {
+  assert.equal(historical.known, true);
+  assert.deepEqual(roundCosts(historical.breakdown), {
     input: 2.5,
     cacheCreate5m: 0,
     cacheCreate30m: 0,
@@ -1201,7 +1226,16 @@ test("codex-auto-review is priced at the standard OpenAI rate even with priority
     cacheRead: 0.25,
     output: 15,
   });
-  assert.equal(cost.amount, 17.75);
+  assert.equal(historical.amount, 17.75);
+  assert.deepEqual(roundCosts(current.breakdown), {
+    input: 0.2,
+    cacheCreate5m: 0,
+    cacheCreate30m: 0,
+    cacheCreate1h: 0,
+    cacheRead: 0.02,
+    output: 1.2,
+  });
+  assert.equal(current.amount, 1.42);
 });
 
 test("standard catalog fallback is limited to packaged codex-auto-review pricing", () => {
@@ -1212,6 +1246,11 @@ test("standard catalog fallback is limited to packaged codex-auto-review pricing
   const timestamp = new Date("2026-07-15T00:00:00.000Z");
 
   assert.equal(pricing.calculateCost("openai", "codex-auto-review", usageValue, timestamp, {
+    ...pricingOptions,
+    pricingBasis: "standard",
+    pricingCatalog: withoutAutoReview,
+  }).known, true);
+  assert.equal(pricing.calculateCost("openai", "codex-auto-review", usageValue, new Date("2026-08-07T00:00:00.000Z"), {
     ...pricingOptions,
     pricingBasis: "standard",
     pricingCatalog: withoutAutoReview,

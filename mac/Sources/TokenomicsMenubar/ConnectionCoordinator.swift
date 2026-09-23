@@ -1,9 +1,15 @@
 import AppKit
 import Combine
 import Foundation
+import OSLog
 
 @MainActor
 public final class ConnectionCoordinator: ObservableObject {
+    private static let logger = Logger(
+        subsystem: "com.tokenomics.viewer.menubar",
+        category: "connection"
+    )
+
     @Published public private(set) var state: ConnectionState = .finding
     @Published public private(set) var payload: SummaryResponse?
     @Published public private(set) var lastGoodPayload: SummaryResponse?
@@ -33,9 +39,7 @@ public final class ConnectionCoordinator: ObservableObject {
         preferences: PreferencesStore = PreferencesStore(),
         client: any TokenomicsHTTPClient = URLSessionTokenomicsClient(),
         launcher: any TokenomicsLauncher = DirectTokenomicsLauncher(),
-        launcherConfigurationResolver: @escaping @MainActor (String) -> PersistedLauncherConfiguration? = {
-            LauncherConfigurationStore.resolveConfiguration(fallbackPath: $0)
-        }
+        launcherConfigurationResolver: @escaping @MainActor (String) -> PersistedLauncherConfiguration? = { _ in nil }
     ) {
         self.preferences = preferences
         self.client = client
@@ -182,6 +186,10 @@ public final class ConnectionCoordinator: ObservableObject {
     }
 
     private func runRefresh(generation: Int, triggerSync: Bool) async {
+        let startedAt = Date()
+        Self.logger.notice(
+            "refresh_started generation=\(generation) port=\(self.preferences.preferredPort) trigger_sync=\(triggerSync)"
+        )
         isRefreshing = true
         defer {
             if generation == operationGeneration { isRefreshing = false }
@@ -197,11 +205,26 @@ public final class ConnectionCoordinator: ObservableObject {
             var syncSnapshot: SyncProbe?
             var syncFailureMessage: String?
             let initialSync = try await client.probeSync(at: selected)
+            Self.logger.notice(
+                "sync_observed generation=\(generation) port=\(selected.port) state=\(initialSync.state.rawValue, privacy: .public) report_ready=\(initialSync.reportReady)"
+            )
             if !initialSync.reportReady {
                 payload = nil
                 lastGoodPayload = nil
                 state = .syncing(lastGood: false)
                 syncSnapshot = try await waitForReport(at: selected, generation: generation)
+                if discovery.launched && syncSnapshot?.state == .running {
+                    syncSnapshot = try await waitForLaunchedSync(at: selected, generation: generation)
+                }
+            } else if discovery.launched && initialSync.state == .running {
+                // The launcher starts the backend with --sync. A previous report
+                // may already be publishable, but the single-threaded backend can
+                // stop servicing summary requests while that startup sync runs.
+                // Wait for the owned sync instead of mistaking HTTP starvation for
+                // an offline service or leaving the menu in Starting until the next
+                // periodic refresh.
+                state = .syncing(lastGood: lastGoodPayload != nil)
+                syncSnapshot = try await waitForLaunchedSync(at: selected, generation: generation)
             } else if triggerSync && !discovery.launched {
                 state = .syncing(lastGood: lastGoodPayload != nil)
                 do {
@@ -214,34 +237,63 @@ public final class ConnectionCoordinator: ObservableObject {
             }
 
             guard isCurrent(generation) else { return }
-            var next = try await client.fetchSummary(at: selected)
+            let summaryDeadline = Date().addingTimeInterval(
+                discovery.launched || initialSync.state == .running || !initialSync.reportReady
+                    ? 30 * 60
+                    : 120
+            )
+            var next = try await fetchSummaryWhileWaiting(
+                at: selected,
+                generation: generation,
+                deadline: summaryDeadline
+            )
+            var receiptProbe = syncSnapshot
             if let syncSnapshot {
                 next.sync = SyncInfo(state: syncSnapshot.state, available: syncSnapshot.available, error: syncSnapshot.error)
             } else {
                 if let sync = try? await client.probeSync(at: selected) {
+                    receiptProbe = sync
                     next.sync = SyncInfo(state: sync.state, available: sync.available, error: sync.error)
                 } else if let syncFailureMessage {
                     next.sync = SyncInfo(state: .failed, error: syncFailureMessage)
                 }
+            }
+            if let summaryReceipt = next.receipt?.receiptId,
+               let syncReceipt = receiptProbe?.reportReceiptId,
+               summaryReceipt != syncReceipt {
+                throw EndpointError.network("Summary and sync status refer to different report snapshots.")
             }
             if let syncFailureMessage, next.sync.state != .running {
                 next.sync = SyncInfo(state: .failed, error: syncFailureMessage)
             }
             guard isCurrent(generation) else { return }
             apply(next)
+            let durationMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
+            Self.logger.notice(
+                "refresh_completed generation=\(generation) port=\(selected.port) state=\(next.sync.state.rawValue, privacy: .public) duration_ms=\(durationMilliseconds)"
+            )
         } catch is CancellationError {
             return
         } catch let error as LauncherError {
             guard isCurrent(generation) else { return }
+            Self.logger.error(
+                "refresh_failed generation=\(generation) phase=launcher error=\(Self.message(for: error), privacy: .public)"
+            )
             clearConnectionCache()
             launcherOutput = Self.launcherOutput(for: error)
             state = .startFailure(message: error.localizedDescription, output: launcherOutput)
             lastErrorMessage = error.localizedDescription
         } catch let error as EndpointError {
             guard isCurrent(generation) else { return }
+            Self.logger.error(
+                "refresh_failed generation=\(generation) phase=endpoint error=\(Self.message(for: error), privacy: .public)"
+            )
             handle(error)
         } catch {
             guard isCurrent(generation) else { return }
+            Self.logger.error(
+                "refresh_failed generation=\(generation) phase=unexpected error=\(Self.message(for: error), privacy: .public)"
+            )
             handle(.network(Self.message(for: error)))
         }
     }
@@ -365,7 +417,10 @@ public final class ConnectionCoordinator: ObservableObject {
         let deadline = Date().addingTimeInterval(120)
         while Date() < deadline {
             guard isCurrent(generation) else { throw CancellationError() }
-            let status = try await client.probeSync(at: endpoint)
+            guard let status = try await probeSyncWhileWaiting(at: endpoint, phase: "triggered_sync") else {
+                try await Task.sleep(for: .milliseconds(500))
+                continue
+            }
             switch status.state {
             case .succeeded:
                 return status
@@ -387,7 +442,10 @@ public final class ConnectionCoordinator: ObservableObject {
         let deadline = Date().addingTimeInterval(30 * 60)
         while Date() < deadline {
             guard isCurrent(generation) else { throw CancellationError() }
-            let status = try await client.probeSync(at: endpoint)
+            guard let status = try await probeSyncWhileWaiting(at: endpoint, phase: "initial_report") else {
+                try await Task.sleep(for: .milliseconds(500))
+                continue
+            }
             if status.reportReady { return status }
             if status.state == .failed {
                 throw EndpointError.network(status.error ?? "The backend refresh failed")
@@ -395,6 +453,74 @@ public final class ConnectionCoordinator: ObservableObject {
             try await Task.sleep(for: .milliseconds(500))
         }
         throw EndpointError.timeout
+    }
+
+    private func waitForLaunchedSync(at endpoint: Endpoint, generation: Int) async throws -> SyncProbe {
+        let deadline = Date().addingTimeInterval(30 * 60)
+        while Date() < deadline {
+            guard isCurrent(generation) else { throw CancellationError() }
+            guard let status = try await probeSyncWhileWaiting(at: endpoint, phase: "launched_sync") else {
+                try await Task.sleep(for: .milliseconds(500))
+                continue
+            }
+            switch status.state {
+            case .idle, .succeeded:
+                return status
+            case .failed:
+                throw EndpointError.network(status.error ?? "The backend startup sync failed")
+            case .running:
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        throw EndpointError.timeout
+    }
+
+    private func fetchSummaryWhileWaiting(
+        at endpoint: Endpoint,
+        generation: Int,
+        deadline: Date
+    ) async throws -> SummaryResponse {
+        while Date() < deadline {
+            guard isCurrent(generation) else { throw CancellationError() }
+            do {
+                return try await client.fetchSummary(at: endpoint)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as EndpointError {
+                switch error {
+                case .timeout, .network, .httpStatus(503):
+                    Self.logger.warning(
+                        "summary_fetch_retry port=\(endpoint.port) error=\(Self.message(for: error), privacy: .public)"
+                    )
+                    try await Task.sleep(for: .milliseconds(500))
+                default:
+                    throw error
+                }
+            }
+        }
+        throw EndpointError.timeout
+    }
+
+    /// Once a sync has been observed or accepted, the backend may temporarily
+    /// stop servicing HTTP while it publishes the next report. Preserve the
+    /// outer operation deadline instead of turning one transient probe failure
+    /// into an Offline state and discarding the last confirmed snapshot.
+    private func probeSyncWhileWaiting(at endpoint: Endpoint, phase: String) async throws -> SyncProbe? {
+        do {
+            return try await client.probeSync(at: endpoint)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as EndpointError {
+            switch error {
+            case .timeout, .network:
+                Self.logger.warning(
+                    "sync_probe_retry phase=\(phase, privacy: .public) port=\(endpoint.port) error=\(Self.message(for: error), privacy: .public)"
+                )
+                return nil
+            default:
+                throw error
+            }
+        }
     }
 
     private func apply(_ next: SummaryResponse) {

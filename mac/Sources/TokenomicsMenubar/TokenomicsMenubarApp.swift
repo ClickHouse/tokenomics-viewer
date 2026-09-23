@@ -31,7 +31,12 @@ struct TokenomicsMenubar: App {
 
     init() {
         let prefs = PreferencesStore()
-        let coordinator = ConnectionCoordinator(preferences: prefs)
+        let coordinator = ConnectionCoordinator(
+            preferences: prefs,
+            launcherConfigurationResolver: {
+                LauncherConfigurationStore.resolveConfiguration(fallbackPath: $0)
+            }
+        )
         _coordinator = StateObject(wrappedValue: coordinator)
         _clock = StateObject(wrappedValue: MinuteClock())
         settingsWindowController = SettingsWindowController(preferences: prefs)

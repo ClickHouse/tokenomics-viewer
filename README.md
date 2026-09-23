@@ -499,10 +499,11 @@ Claude's first transition into fast mode can invalidate the current prompt
 cache; Tokenomics prices the token buckets recorded by the harness and does not
 guess that transition from surrounding requests.
 
-`codex-auto-review` is included at effective rates of `$2.50` input, `$0.25`
-cached input, and `$15.00` output per million tokens. Those rates are derived
-from an observed OpenAI workspace billing export; OpenAI does not currently
-publish a separate public model-rate page for this internal model id.
+`codex-auto-review` uses effective rates of `$2.50` input, `$0.25` cached
+input, and `$15.00` output per million tokens through August 6, 2026, then
+`$0.20`, `$0.02`, and `$1.20` respectively from August 7. The rates and cutoff
+are derived from observed OpenAI workspace billing exports; OpenAI does not
+currently publish a separate public model-rate page for this internal model id.
 
 omp (oh-my-pi) cost is estimated from the packaged omp pricing catalog using
 official Z.AI (Zhipu AI) GLM rates in USD per million tokens
@@ -532,6 +533,20 @@ For a smaller diagnostic run:
 ```bash
 tokenomics --sync --db-engine clickhouse --source codex --limit-files 20
 ```
+
+Each sync also emits single-line JSON records prefixed with `[sync-metric]`.
+They cover discovery, per-source imports, same-session source decisions, and the
+final report snapshot. The records include request, token, cost, pricing,
+parser, date-range, model, agent, and service-mode metrics so runs can be
+compared with standard JSON tooling:
+
+```bash
+tokenomics --sync --source codex 2>&1 | rg '^\[sync-metric\]'
+```
+
+Structured diagnostic records use stable hashed source and session identifiers
+instead of raw paths or session IDs. Existing human-readable progress messages
+remain available for interactive troubleshooting.
 
 ### `chctl` Is Not Found
 

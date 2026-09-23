@@ -494,6 +494,36 @@ final class SummaryDecodingTests: XCTestCase {
         XCTAssertTrue(response.providerModelEffortDaily.isEmpty)
     }
 
+    func testDecodesReportReceiptAndSnapshotTimestamps() throws {
+        let json = """
+        {
+          "contractVersion": 1,
+          "generatedAt": "2026-09-17T12:00:00.000Z",
+          "committedAt": "2026-09-17T12:00:00.000Z",
+          "dataThrough": "2026-09-17T11:59:59.000Z",
+          "servedAt": "2026-09-17T12:00:01.000Z",
+          "pricingRevision": "pricing-2026-09",
+          "receipt": {
+            "contractVersion": 1,
+            "receiptId": "receipt-abc",
+            "reportDigest": "report-digest",
+            "sourceManifestDigest": "manifest-digest",
+            "eventSetDigest": "event-digest",
+            "runtimeId": "runtime-abc",
+            "syncRunId": 7
+          }
+        }
+        """
+        let response = try JSONDecoder().decode(SummaryResponse.self, from: Data(json.utf8))
+
+        XCTAssertEqual(response.receipt?.receiptId, "receipt-abc")
+        XCTAssertEqual(response.receipt?.runtimeId, "runtime-abc")
+        XCTAssertEqual(response.receipt?.syncRunId, 7)
+        XCTAssertEqual(response.pricingRevision, "pricing-2026-09")
+        XCTAssertEqual(response.generatedAt, response.committedAt)
+        XCTAssertLessThan(try XCTUnwrap(response.dataThrough), try XCTUnwrap(response.servedAt))
+    }
+
     func testProviderDailyGroupsDecodeAndAggregateByProviderForTodayAndMonthToDate() throws {
         let json = """
         {
@@ -745,6 +775,27 @@ final class CoordinatorSyncTests: XCTestCase {
         coordinator.stop()
     }
 
+    func testReceiptMismatchRejectsMixedSummarySnapshot() async throws {
+        let suiteName = "TokenomicsMenubarTests.receipt-mismatch"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        preferences.automaticSyncEnabled = false
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: ReceiptMismatchClient(),
+            launcher: FailingLauncher()
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertNil(coordinator.payload)
+        XCTAssertNil(coordinator.lastGoodPayload)
+        XCTAssertTrue(coordinator.lastErrorMessage?.contains("different report snapshots") == true)
+    }
+
     func testUnavailableStartsLauncherAutomatically() async throws {
         let suite = UserDefaults(suiteName: "TokenomicsMenubarTests.explicit-start")!
         suite.removePersistentDomain(forName: "TokenomicsMenubarTests.explicit-start")
@@ -836,6 +887,78 @@ final class CoordinatorSyncTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .connected)
     }
 
+    func testInitialReportPublicationSurvivesTransientProbeTimeout() async throws {
+        let suiteName = "TokenomicsMenubarTests.transient-publication-timeout"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        let client = TransientPublishingClient()
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: FailingLauncher()
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(client.probeCount, 5)
+        XCTAssertEqual(client.summaryFetchCount, 1)
+        XCTAssertEqual(coordinator.payload?.currentMonth?.amountUSD, 3)
+        XCTAssertEqual(coordinator.state, .connected)
+        XCTAssertNil(coordinator.lastErrorMessage)
+    }
+
+    func testReadyReportSurvivesTransientSummaryTimeout() async throws {
+        let suiteName = "TokenomicsMenubarTests.transient-summary-timeout"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        preferences.automaticSyncEnabled = false
+        let client = TransientSummaryClient()
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: FailingLauncher()
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(client.summaryFetchCount, 2)
+        XCTAssertEqual(coordinator.payload?.currentMonth?.amountUSD, 4)
+        XCTAssertEqual(coordinator.state, .connected)
+        XCTAssertNil(coordinator.lastErrorMessage)
+    }
+
+    func testColdLaunchWaitsForOwnedSyncBeforeFetchingSummary() async throws {
+        let suiteName = "TokenomicsMenubarTests.cold-launch-running-sync"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let preferences = PreferencesStore(defaults: suite)
+        let client = ColdLaunchClient()
+        let launcher = ColdLaunchLauncher(client: client)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        await coordinator.waitForCurrentOperation()
+
+        XCTAssertEqual(launcher.startCount, 1)
+        XCTAssertEqual(client.summaryFetchCount, 1)
+        XCTAssertEqual(client.probeCount, 5)
+        XCTAssertEqual(coordinator.payload?.currentMonth?.amountUSD, 5)
+        XCTAssertEqual(coordinator.state, .connected)
+        XCTAssertNil(coordinator.lastErrorMessage)
+    }
+
     func testWrongServiceIsNotReplacedByTheLauncher() async throws {
         let suiteName = "TokenomicsMenubarTests.wrong-service"
         let suite = UserDefaults(suiteName: suiteName)!
@@ -865,7 +988,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.launcherPath = "/bin/sh"
         let client = StartableClient()
         let launcher = RecordingLauncher(client: client)
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
         defer { coordinator.stop() }
 
         coordinator.start()
@@ -887,7 +1015,8 @@ final class CoordinatorSyncTests: XCTestCase {
         let coordinator = ConnectionCoordinator(
             preferences: preferences,
             client: client,
-            launcher: OutputLauncher(output: "[start] scanning local sessions\n")
+            launcher: OutputLauncher(output: "[start] scanning local sessions\n"),
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
         )
 
         let probe = expectation(description: "startup probes the configured endpoint")
@@ -915,7 +1044,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.launcherPath = "/bin/sh"
         let client = StartableClient()
         let launcher = RecordingLauncher(client: client)
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
         defer { coordinator.stop() }
 
         coordinator.start()
@@ -943,7 +1077,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.launcherPath = "/bin/sh"
         let client = PortSwitchClient(availablePorts: [8787])
         let launcher = PortStartingLauncher(client: client)
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: launcher)
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: launcher,
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
 
         coordinator.start()
         await coordinator.waitForCurrentOperation()
@@ -972,7 +1111,12 @@ final class CoordinatorSyncTests: XCTestCase {
         preferences.automaticSyncEnabled = false
         preferences.launcherPath = "/bin/sh"
         let client = DisappearingClient()
-        let coordinator = ConnectionCoordinator(preferences: preferences, client: client, launcher: FailingLauncher())
+        let coordinator = ConnectionCoordinator(
+            preferences: preferences,
+            client: client,
+            launcher: FailingLauncher(),
+            launcherConfigurationResolver: { _ in PersistedLauncherConfiguration(command: "/bin/sh") }
+        )
 
         coordinator.start()
         await coordinator.waitForCurrentOperation()
@@ -1026,6 +1170,29 @@ private final class RunningZeroClient: TokenomicsHTTPClient, @unchecked Sendable
     func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
         SummaryResponse(currentMonth: UsagePeriod(amountUSD: 0), daily: [DailySpendPoint(date: "2026-08-03", amountUSD: 0)], sync: SyncInfo(state: .running))
     }
+}
+
+private final class ReceiptMismatchClient: TokenomicsHTTPClient, @unchecked Sendable {
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        SyncProbe(state: .succeeded, reportReceiptId: "receipt-sync")
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        SummaryResponse(
+            receipt: ReportReceipt(
+                contractVersion: 1,
+                receiptId: "receipt-summary",
+                reportDigest: nil,
+                sourceManifestDigest: nil,
+                eventSetDigest: nil,
+                runtimeId: nil,
+                syncRunId: nil
+            ),
+            currentMonth: UsagePeriod(amountUSD: 999)
+        )
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {}
 }
 
 @MainActor
@@ -1183,6 +1350,109 @@ private final class PublishingClient: TokenomicsHTTPClient, @unchecked Sendable 
     }
 
     func triggerSync(at endpoint: Endpoint) async throws { syncRequestCount += 1 }
+}
+
+private final class TransientPublishingClient: TokenomicsHTTPClient, @unchecked Sendable {
+    private(set) var probeCount = 0
+    private(set) var summaryFetchCount = 0
+
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        probeCount += 1
+        switch probeCount {
+        case 1, 2, 3:
+            return SyncProbe(state: .running, reportReady: false)
+        case 4:
+            try await Task.sleep(for: .milliseconds(50))
+            throw EndpointError.timeout
+        default:
+            return SyncProbe(state: .succeeded, reportReady: true)
+        }
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        summaryFetchCount += 1
+        return SummaryResponse(currentMonth: UsagePeriod(amountUSD: 3), daily: [])
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {}
+}
+
+private final class TransientSummaryClient: TokenomicsHTTPClient, @unchecked Sendable {
+    private(set) var summaryFetchCount = 0
+
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        SyncProbe(
+            state: summaryFetchCount >= 2 ? .succeeded : .running,
+            reportReady: true
+        )
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        summaryFetchCount += 1
+        if summaryFetchCount == 1 {
+            try await Task.sleep(for: .milliseconds(50))
+            throw EndpointError.timeout
+        }
+        return SummaryResponse(
+            currentMonth: UsagePeriod(amountUSD: 4),
+            daily: [],
+            sync: SyncInfo(state: .succeeded)
+        )
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {}
+}
+
+private final class ColdLaunchClient: TokenomicsHTTPClient, @unchecked Sendable {
+    var started = false
+    private(set) var probeCount = 0
+    private(set) var summaryFetchCount = 0
+
+    func probeSync(at endpoint: Endpoint) async throws -> SyncProbe {
+        guard started else { throw EndpointError.network("offline") }
+        probeCount += 1
+        switch probeCount {
+        case 1, 2:
+            return SyncProbe(state: .running, reportReady: false)
+        case 3:
+            return SyncProbe(state: .running, reportReady: true)
+        case 4:
+            try await Task.sleep(for: .milliseconds(50))
+            throw EndpointError.timeout
+        default:
+            return SyncProbe(state: .succeeded, reportReady: true)
+        }
+    }
+
+    func fetchSummary(at endpoint: Endpoint) async throws -> SummaryResponse {
+        summaryFetchCount += 1
+        guard probeCount >= 5 else {
+            throw EndpointError.network("summary fetched before the startup sync settled")
+        }
+        return SummaryResponse(
+            currentMonth: UsagePeriod(amountUSD: 5),
+            daily: [],
+            sync: SyncInfo(state: .succeeded)
+        )
+    }
+
+    func triggerSync(at endpoint: Endpoint) async throws {}
+}
+
+@MainActor
+private final class ColdLaunchLauncher: TokenomicsLauncher {
+    private let client: ColdLaunchClient
+    private(set) var startCount = 0
+
+    init(client: ColdLaunchClient) {
+        self.client = client
+    }
+
+    func start(executablePath: String, port: Int, timeout: Duration) async throws -> any TokenomicsProcessHandle {
+        startCount += 1
+        client.started = true
+        return RecordingProcess()
+    }
 }
 
 private final class UnavailableClient: TokenomicsHTTPClient, @unchecked Sendable {
