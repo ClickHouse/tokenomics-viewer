@@ -60,3 +60,16 @@ test("ClickHouse pricing projection uses canonical service_mode for Anthropic fa
   const customSql = buildClickHouseCostProjection(custom, { alias: "raw" });
   assert.doesNotMatch(customSql.projection, /raw\.service_mode/);
 });
+
+test("ClickHouse GPT-6.1 Sol Fast pricing uses the API or subscription multiplier", () => {
+  const encodedModel = Buffer.from("gpt-6.1-sol").toString("base64");
+  for (const [mode, multiplier] of [["api", "2"], ["subscription", "2.5"]]) {
+    const configuration = defaultConfiguration();
+    configuration.settings.usageProfile.mode = mode;
+    const sql = buildClickHouseCostProjection(configuration, { provider: "provider", model: "model", serviceTier: "tier" });
+    const firstFastBranch = sql.projection.match(/multiIf\(\(provider = 'openai'[\s\S]*?, (2(?:\.5)?),/);
+    assert.ok(firstFastBranch);
+    assert.ok(firstFastBranch[0].includes(encodedModel));
+    assert.equal(firstFastBranch[1], multiplier);
+  }
+});

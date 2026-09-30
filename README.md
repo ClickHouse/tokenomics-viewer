@@ -467,12 +467,17 @@ necessarily a user request or completed task, and tariff coverage means only
 that the local catalog recognized an event. Without outcome or quality data,
 Tokenomics does not rank effort levels as objectively better or worse.
 
-GPT-6 Astra, Sol, and Luna, and GPT-5.6 Sol, Terra, and Luna support separate
+GPT-6.1 Sol, GPT-6 Astra, Sol, and Luna, and GPT-5.6 Sol, Terra, and Luna support separate
 input, cache-write, cache-read, and output rates. GPT-6 Sol and Luna use their
 [official rates](https://developers.openai.com/api/docs/pricing) from September
 22, 2026 UTC; earlier usage of those model IDs stays unpriced. Packaged GPT-5.6
 Sol prices preserve the pre-August 21, 2026 tariff and apply the reduced rate
-from that date.
+from that date. GPT-6.1 Sol uses its [official rates](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+from September 29, 2026 UTC: $2 input, $2.50 cache write, $0.10 cache read,
+and $10 output per million tokens. Above 272K total input tokens (including
+cache reads and writes), the entire request uses $4/$5/$0.20/$15 respectively.
+Earlier usage stays unpriced. The packaged-8 catalog upgrade adds these rows
+while preserving existing edited tariffs and avoiding source reimport.
 Legacy Codex `input_tokens` plus `cached_input_tokens` records are
 treated as total input with cached input as a read subset. Explicit
 `cache_creation_input_tokens` plus `cache_read_input_tokens` records preserve
@@ -481,7 +486,7 @@ legacy records that cannot prove it.
 
 For standard pricing, Codex `thread_settings_applied.service_tier=priority`
 applies the documented ChatGPT fast-mode credit multipliers: `2.5x` for
-GPT-6 Astra, GPT-5.6, and GPT-5.5, and `2x` for GPT-5.4
+GPT-6.1 Sol, GPT-6 Astra, GPT-5.6, and GPT-5.5, and `2x` for GPT-5.4
 ([official fast-mode documentation](https://learn.chatgpt.com/docs/agent-configuration/speed)).
 This is deliberately separate from API Priority processing. GPT-6 Sol and Luna
 do not receive a Codex fast credit multiplier until that separate tariff is
@@ -490,7 +495,14 @@ or unknown tiers remain standard-priced instead of silently assuming fast mode. 
 particular, a forked child rollout that omits its own service tier does not
 inherit the parent's tier, so such local logs can understate workspace billing.
 Custom pricing is used as entered and does not receive these packaged
-multipliers.
+multipliers. For GPT-6.1 Sol, the API profile uses `2x`; the subscription profile
+uses the `2.5x` estimate for included subscription limits. Switching profile modes
+recalculates stored estimates. Purchased credits and Enterprise pay-as-you-go
+also use `2x` according to the official documentation; select the API profile
+for that estimate or enter a custom tariff. These profile choices set the
+estimator convention: local service-tier logs do not identify which billing
+arrangement paid for a request. Direct calculation without a configured profile
+retains the Codex `2.5x` convention.
 
 Claude Code `usage.speed` is mapped per request: `fast` is fast mode and
 `standard`/`normal` are standard mode; missing or invalid values remain
