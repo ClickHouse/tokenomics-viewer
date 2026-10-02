@@ -630,6 +630,31 @@ public struct Endpoint: Codable, Equatable, Hashable, Sendable, CustomStringConv
 }
 
 public enum Presentation {
+    static var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    static func calendarDayDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = utcCalendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = utcCalendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
+    }
+
+    static func calendarDayLabel(_ value: String, locale: Locale = .current) -> String {
+        guard let date = calendarDayDate(value) else { return value }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = utcCalendar
+        formatter.timeZone = utcCalendar.timeZone
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: date)
+    }
+
     public static func currency(_ value: Double) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency

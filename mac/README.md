@@ -4,6 +4,9 @@ This is a small macOS 14+ companion for the local Tokenomics service. It shows
 today's and month-to-date usage in the menu bar, with subscription quota
 windows, a compact provider breakdown, and a daily chart. The menu-bar label
 can show today's usage, shortest-window quota use, or its reset countdown.
+Today, month-to-date, and daily usage follow the service's UTC calendar. Daily
+chart labels preserve those dates in every local time zone; quota reset countdowns
+still show the time remaining until the provider's reset instant.
 
 The native client is a renderer and lifecycle companion, not a second analytics
 engine. The local Node service owns ClickHouse access, sync, calendar, and
