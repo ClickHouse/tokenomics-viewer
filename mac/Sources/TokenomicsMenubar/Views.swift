@@ -112,7 +112,7 @@ enum MenuBarPresentation {
         switch mode {
         case .today:
             guard payload.hasAnyUsageValue, let today = payload.currentDay(on: now)?.amountUSD else { return nil }
-            let prefix = payload.costSemantics == "api-equivalent" ? "Today eq." : "Today"
+            let prefix = payload.costSemantics == "api-equivalent" ? "Today UTC eq." : "Today UTC"
             let denominator = todayDenominator(payload)
             if let denominator {
                 return "\(prefix) \(Presentation.compactCurrency(today))/\(Presentation.compactCurrency(denominator))"
@@ -215,7 +215,7 @@ public struct MenuBarLabelView: View {
         if let payload = coordinator.payload ?? coordinator.lastGoodPayload {
             let today = payload.currentDay(on: now)?.amountUSD.map(Presentation.currency) ?? "No data"
             let month = payload.monthToDate?.amountUSD.map(Presentation.currency) ?? "No data"
-            return "Tokenomics. Today \(today). Month to date \(month). State \(stateLabel)."
+            return "Tokenomics. Today UTC \(today). Month to date UTC \(month). State \(stateLabel)."
         }
         return "Tokenomics: \(stateLabel)"
     }
@@ -346,7 +346,7 @@ public struct PopoverView: View {
             if let denominator = todayDenominator {
                 ProgressView(value: todayValue / max(denominator, 0.000_001))
                     .tint(BudgetUsageLevel(amount: todayValue, limit: denominator).color)
-                    .accessibilityLabel("Today budget progress")
+                    .accessibilityLabel("Today UTC budget progress")
                     .accessibilityValue("\(Presentation.currency(todayValue)) of \(Presentation.currency(denominator))")
                 Text("Budget \(Presentation.currency(denominator))").font(.caption).foregroundStyle(.secondary)
             } else if isNoLimit {
@@ -368,7 +368,7 @@ public struct PopoverView: View {
             if let denominator = monthDenominator {
                 ProgressView(value: monthValue / max(denominator, 0.000_001))
                     .tint(BudgetUsageLevel(amount: monthValue, limit: denominator).color)
-                    .accessibilityLabel("Month to date budget progress")
+                    .accessibilityLabel("Month to date UTC budget progress")
                     .accessibilityValue("\(Presentation.currency(monthValue)) of \(Presentation.currency(denominator))")
                 Text("Budget \(Presentation.currency(denominator))").font(.caption).foregroundStyle(.secondary)
             } else if isNoLimit {
@@ -387,7 +387,7 @@ public struct PopoverView: View {
             Text("No daily history yet").font(.caption).foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Daily usage").font(.subheadline.weight(.medium))
+                Text("Daily usage · UTC").font(.subheadline.weight(.medium))
                 if let target {
                     Text("Weekday target \(Presentation.currency(target))/day")
                         .font(.caption2)
@@ -440,8 +440,8 @@ public struct PopoverView: View {
     private var monthValue: Double { payload?.monthToDate?.amountUSD ?? 0 }
     private var todayAmount: String { payload?.today?.amountUSD.map(Presentation.currency) ?? "No data yet" }
     private var monthAmount: String { payload?.monthToDate?.amountUSD.map(Presentation.currency) ?? "No data yet" }
-    private var todayTitle: String { isApiEquivalent ? "Today · API equivalent" : "Today" }
-    private var monthTitle: String { isApiEquivalent ? "Month · API equivalent" : "Month to date" }
+    private var todayTitle: String { isApiEquivalent ? "Today · UTC · API equivalent" : "Today · UTC" }
+    private var monthTitle: String { isApiEquivalent ? "Month · UTC · API equivalent" : "Month to date · UTC" }
     private var isApiEquivalent: Bool { payload?.costSemantics == "api-equivalent" }
     private var todayProviderSpend: [ProviderSpend] { payload?.providerSpendToday(on: Date()) ?? [] }
     private var monthProviderSpend: [ProviderSpend] { payload?.providerSpendMonthToDate(on: Date()) ?? [] }
@@ -703,7 +703,7 @@ private struct DailyUsageChart: View {
         }
         .overlay(alignment: .topLeading) {
             if let hoveredPoint {
-                Text("\(dayLabel(hoveredPoint.date)) · \(hoveredPoint.amountUSD.map(Presentation.currency) ?? "No data")")
+                Text("\(Presentation.calendarDayLabel(hoveredPoint.date)) · \(hoveredPoint.amountUSD.map(Presentation.currency) ?? "No data")")
                     .font(.caption2)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
@@ -712,7 +712,8 @@ private struct DailyUsageChart: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Daily usage chart")
+        .environment(\.calendar, Presentation.utcCalendar)
+        .accessibilityLabel("Daily usage chart, UTC")
         .accessibilityValue(points.map { point in
             "\(point.date): \(point.amountUSD.map(Presentation.currency) ?? "No data")"
         }.joined(separator: ", "))
@@ -720,26 +721,9 @@ private struct DailyUsageChart: View {
 
     private var plotPoints: [PlotPoint] {
         points.compactMap { point in
-            guard let day = date(for: point.date) else { return nil }
+            guard let day = Presentation.calendarDayDate(point.date) else { return nil }
             return PlotPoint(source: point, day: day)
         }
-    }
-
-    private func date(for value: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: value)
-    }
-
-    private func dayLabel(_ value: String) -> String {
-        guard let date = date(for: value) else { return value }
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.dateFormat = "MMM d"
-        return formatter.string(from: date)
     }
 
     private func barColor(for point: DailySpendPoint) -> Color {

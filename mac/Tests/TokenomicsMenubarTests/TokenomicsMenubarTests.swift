@@ -96,7 +96,45 @@ final class LoginItemControllerTests: XCTestCase {
     }
 }
 
+final class CalendarDayPresentationTests: XCTestCase {
+    func testDayLabelsPreserveUTCBucketsInLocalTimeZones() {
+        let originalTimeZone = NSTimeZone.default
+        defer { NSTimeZone.default = originalTimeZone }
+        let locale = Locale(identifier: "en_US_POSIX")
+        for zone in ["America/New_York", "Asia/Tokyo"] {
+            NSTimeZone.default = TimeZone(identifier: zone)!
+            for (day, label) in [
+                ("2026-10-02", "Oct 2"),
+                ("2026-01-01", "Jan 1"),
+                ("2026-03-08", "Mar 8"),
+                ("2026-11-01", "Nov 1"),
+            ] {
+                XCTAssertEqual(Presentation.calendarDayLabel(day, locale: locale), label, "\(zone): \(day)")
+            }
+        }
+        XCTAssertEqual(Presentation.calendarDayLabel("invalid", locale: locale), "invalid")
+    }
+}
+
 final class QuotaPresentationTests: XCTestCase {
+    func testTodayLabelUsesUTCDayAcrossNewYorkMidnight() {
+        let payload = SummaryResponse(
+            currentMonth: UsagePeriod(name: "2026-10", through: "2026-10-02", amountUSD: 58.93),
+            daily: [
+                DailySpendPoint(date: "2026-10-01", amountUSD: 49.4019449),
+                DailySpendPoint(date: "2026-10-02", amountUSD: 9.52825664),
+            ]
+        )
+        let formatter = ISO8601DateFormatter()
+        for (timestamp, expected) in [
+            ("2026-10-01T19:59:59-04:00", "Today UTC $49.40"),
+            ("2026-10-01T20:00:00-04:00", "Today UTC $9.53"),
+            ("2026-10-02T00:00:00-04:00", "Today UTC $9.53"),
+        ] {
+            XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .today, now: formatter.date(from: timestamp)!), expected)
+        }
+    }
+
     func testQuotaLabelsAndCountdownUseInjectedClock() {
         let now = ISO8601DateFormatter().date(from: "2026-08-03T12:00:00Z")!
         let reset = ISO8601DateFormatter().date(from: "2026-08-03T13:24:00Z")!
@@ -122,7 +160,7 @@ final class QuotaPresentationTests: XCTestCase {
             currentMonth: UsagePeriod(name: "2026-08", through: "2026-08-03", amountUSD: 18.42),
             daily: [DailySpendPoint(date: "2026-08-03", amountUSD: 18.42)]
         )
-        XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .today, now: now), "Today eq. $18.42")
+        XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .today, now: now), "Today UTC eq. $18.42")
         XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .quotaUsed, now: now), "5h 68%")
         XCTAssertEqual(MenuBarPresentation.labelText(payload: payload, mode: .quotaReset, now: now), "5h 1h 24m")
     }
