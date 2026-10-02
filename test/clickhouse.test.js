@@ -2574,6 +2574,120 @@ test("ClickHouse manifest and provenance queries are accepted by the installed c
   assert.match(outputRows[1].dataThrough, /^2026-09-03T00:00:01/);
 });
 
+test("ClickHouse watermark joins preserve pinned rows without a headers-history cross join", async (t) => {
+  const version = spawnSync("clickhouse", ["local", "--version"], { encoding: "utf8", timeout: 10_000 });
+  if (version.error?.code === "ENOENT") {
+    t.skip("clickhouse-local is not installed; executed watermark/plan regression requires it");
+    return;
+  }
+  assert.ifError(version.error);
+  assert.equal(version.status, 0, version.stderr);
+  t.diagnostic(version.stdout.trim());
+
+  const mock = createClickHouseServer();
+  const home = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-watermark-test-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  mock.activeRows.import_generations = [{ generation_id: "g1", committed_at_ms: 10 }];
+  await withServer(mock, async (url) => {
+    await syncDatabase(defaultOptions({ home, dbEngine: "clickhouse", clickhouseUrl: url }));
+  });
+  const captured = (fragment) => {
+    const query = mock.requests.find((request) => request.query.includes(fragment))?.query;
+    assert.ok(query, `production query must be captured: ${fragment}`);
+    return query;
+  };
+  const queries = {
+    sources: captured("uniqExact(source.import_id) AS active_import_count"),
+    headers: captured("FROM codex_session_versions"),
+    sessions: captured("FROM committed_sessions"),
+    sourceCounts: captured("uniqExactIf(source.source_path"),
+  };
+  const provenance = captured("AS eventSetDigest");
+  const provenanceSelect = provenance.search(/SELECT\s+lower\(hex\(SHA256/);
+  assert.ok(provenanceSelect > 0);
+  // Exercise the actual common committed-row CTE without replacing its join,
+  // watermark or deduplication logic with a test-only equivalent.
+  queries.usage = `${provenance.slice(0, provenanceSelect)}
+    SELECT source_path, import_id, segment_end, line_no, event_key
+    FROM committed_usage_events ORDER BY source_path, segment_end FORMAT JSONEachRow`;
+  const tables = ["import_generations", "import_generation_checkpoints", "import_generation_sources",
+    "import_generation_source_deltas", "sources", "codex_sessions", "codex_session_versions", "sessions", "usage_events"];
+  const setup = tables.map((table) => {
+    const ddl = captured(`CREATE TABLE IF NOT EXISTS ${table} (`);
+    return ddl.replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMPORARY TABLE")
+      .replace(/\)\s+ENGINE =[\s\S]*$/, ")");
+  });
+  const insert = (table, rows) => setup.push(`INSERT INTO ${table} FORMAT JSONEachRow\n${rows.map(JSON.stringify).join("\n")}`);
+  insert("import_generations", [10, 20, 30, 40].map((committed_at_ms, index) => ({ generation_id: `g${index + 1}`, committed_at_ms })));
+  insert("import_generation_checkpoints", [{ generation_id: "g1", committed_at_ms: 10, base_generation_id: "g1", base_committed_at_ms: 10 }]);
+  const manifest = (generation_id, source_path, import_id, committed_segment_end, deleted = 0) => ({
+    generation_id, source_path, import_id, committed_segment_end, deleted,
+  });
+  insert("import_generation_sources", [manifest("g1", "a", "ia", 10), manifest("g1", "nullable", "in", null),
+    manifest("g1", "gone", "ig", 10), manifest("g1", "react", "old", 10)]);
+  insert("import_generation_source_deltas", [
+    { committed_at_ms: 20, ...manifest("g2", "a", "ia", 20) },
+    { committed_at_ms: 20, ...manifest("g2", "gone", "ig", 10, 1) },
+    { committed_at_ms: 20, ...manifest("g2", "react", "old", 10, 1) },
+    { committed_at_ms: 30, ...manifest("g3", "react", "new", 15) },
+    { committed_at_ms: 40, ...manifest("g4", "a", "ia", 30) },
+  ]);
+  const rows = [["a", "ia", 10], ["a", "ia", 20], ["a", "ia", 21], ["a", "ia", 30],
+    ["nullable", "in", 999], ["gone", "ig", 10], ["react", "old", 10], ["react", "new", 15],
+    ["a", "wrong-import", 1], ["wrong-source", "ia", 1]].map(([source_path, import_id, segment_end]) => ({
+    source_path, import_id, segment_end, kind: source_path === "nullable" ? "zip-entry" : "jsonl",
+    archive_path: source_path === "nullable" ? "archive.zip" : "", entry_name: source_path === "nullable" ? "entry.jsonl" : "",
+  }));
+  insert("sources", rows.map((row) => ({ ...row, fingerprint: `${row.import_id}:${row.segment_end}`,
+    imported_at: "2026-09-03T00:00:00Z", parser_checkpoint: `checkpoint:${row.segment_end}` })));
+  const headers = rows.map((row) => ({ ...row, session_id: `session:${row.source_path}`,
+    parent_session_id: `parent:${row.import_id}:${row.segment_end}`, updated_at_ms: row.segment_end }));
+  insert("codex_sessions", [headers[0]]);
+  insert("codex_session_versions", [...headers.slice(1), headers[1],
+    { ...headers[4], parent_session_id: "tied-parent" }]);
+  insert("sessions", [...rows, rows[0]].map((row) => ({ ...row, segment_start: row.segment_end - 1,
+    stats_json: JSON.stringify({ requests: row.segment_end }) })));
+  insert("usage_events", [...rows, rows[0]].map((row) => ({ ...row, line_no: row.segment_end,
+    event_key: `request:${row.source_path}:${row.import_id}:${row.segment_end}`, agent: "codex", provider: "openai" })));
+  const execute = (query, generation) => {
+    const result = spawnSync("clickhouse", ["local", `--param_generation=${generation}`,
+      "--max_threads=1", "--max_memory_usage=536870912", "--max_execution_time=10",
+      ...[...setup, query].flatMap((statement) => ["--query", statement])], { encoding: "utf8", timeout: 20_000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const jsonRows = (query, generation) => execute(query, generation).split("\n").filter(Boolean).map(JSON.parse);
+  const expected = {
+    g1: [["a", "ia", 10], ["gone", "ig", 10], ["nullable", "in", 999], ["react", "old", 10]],
+    g2: [["a", "ia", 10], ["a", "ia", 20], ["nullable", "in", 999]],
+    g3: [["a", "ia", 10], ["a", "ia", 20], ["nullable", "in", 999], ["react", "new", 15]],
+  };
+  const sorted = (values) => values.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  for (const [generation, active] of Object.entries(expected)) {
+    const latest = new Map(active.map(([path, importId, end]) => [path, [path, importId, end]]));
+    const sourceRows = jsonRows(queries.sources, generation);
+    assert.deepEqual(sorted(sourceRows.map((row) => [row.source_path, row.import_id, Number(row.segment_end)])), sorted([...latest.values()]));
+    assert.ok(sourceRows.every((row) => row.fingerprint === `${row.import_id}:${row.segment_end}` && row.parser_checkpoint === `checkpoint:${row.segment_end}`));
+    const headerRows = jsonRows(queries.headers, generation);
+    assert.equal(headerRows.length, latest.size, `${generation}: headers must deduplicate legacy/current copies`);
+    for (const row of headerRows) {
+      const [, importId, end] = latest.get(row.source_path);
+      assert.equal(row.session_id, `session:${row.source_path}`);
+      const acceptedParents = [`parent:${importId}:${end}`, ...(row.source_path === "nullable" ? ["tied-parent"] : [])];
+      assert.ok(acceptedParents.includes(row.parent_session_id), `${generation}: parent/fork metadata must come from a committed header`);
+      assert.equal(row.archive_path, row.source_path === "nullable" ? "archive.zip" : "");
+      assert.equal(row.entry_name, row.source_path === "nullable" ? "entry.jsonl" : "");
+    }
+    assert.deepEqual(sorted(jsonRows(queries.usage, generation).map((row) => [row.source_path, row.import_id, Number(row.segment_end)])), sorted(active));
+    assert.deepEqual(sorted(jsonRows(queries.sessions, generation).map((row) => [row.source_path, JSON.parse(row.stats_json).requests])), sorted(active.map(([path, , end]) => [path, end])));
+    assert.deepEqual(jsonRows(queries.sourceCounts, generation), [{ files: latest.size - 1, zipEntries: 1, zipFiles: 1 }]);
+  }
+  const plan = execute(`EXPLAIN PLAN header=0, actions=1 ${queries.headers.replace(/\s+FORMAT JSONEachRow\s*$/, "")}`, "g3");
+  assert.ok(!plan.includes("headers × history"), "nullable watermark must not turn the keyed headers/manifest join into a Cartesian join");
+  assert.ok(plan.includes("headers ⋈ history"), "headers must retain a keyed inner join; singleton generation/checkpoint CROSS joins are allowed");
+});
+
 test("ClickHouse legacy header union uses explicit migration-safe column order", async () => {
   const mock = createClickHouseServer();
   mock.activeRows.import_generations = [{ generation_id: "headers-generation", committed_at_ms: 9 }];
