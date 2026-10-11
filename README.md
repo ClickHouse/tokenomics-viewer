@@ -310,7 +310,10 @@ inherited parent history again in subagent sessions.
 All calendar buckets and range boundaries use UTC: day, ISO week, month, year,
 and the existing 15-minute timeline. A version upgrade that changes a derived
 field such as UTC calendar keys or service tier causes one full source reimport;
-later syncs return to normal fingerprint-based incrementality.
+later syncs return to normal fingerprint-based incrementality. Analytics
+derivation version 9 reimports existing sources once so Claude resume-history
+copies with four zero top-level token counters are skipped, even when nested
+cache or thinking details remain nonzero.
 
 Each append-only ClickHouse source keeps one immutable epoch ID while new
 normalized rows are added only for the newly completed byte range. A rewrite
@@ -507,7 +510,19 @@ retains the Codex `2.5x` convention.
 Claude Code `usage.speed` is mapped per request: `fast` is fast mode and
 `standard`/`normal` are standard mode; missing or invalid values remain
 `unknown`. Claude `usage.service_tier` is retained separately and never implies
-fast mode. The packaged catalog prices Claude Opus 5.5 at its
+fast mode. The packaged-9 catalog adds Claude Sonnet 5.5 at $2 input, $2.50
+5-minute cache creation, $4 1-hour cache creation, $0.10 cache reads, and $10
+output per million tokens from September 28, 2026 UTC. It adds Claude Haiku 5.5
+from October 7, 2026 UTC at $0.10/$0.125/$0.20/$0.01/$0.50 for those same
+token buckets through 100,000 total input tokens. Above 100,000, all five
+rates, including output, use the long-context tariff of $0.50/$0.625/$1.00/
+$0.05/$2.50. The threshold counts uncached input, cache writes, and cache reads;
+exactly 100,000 tokens remains on the lower tariff. This Haiku tier depends on
+usage tokens and is independent of the OpenAI context setting and model context
+window. The packaged catalog upgrade preserves edited rates and settings.
+([Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview),
+[Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/overview)).
+The packaged catalog also prices Claude Opus 5.5 at its
 [official rates](https://platform.claude.com/docs/en/about-claude/pricing)
 from September 22, 2026 UTC, including its special 5% cache-read rate.
 It prices Claude Opus 5 and Claude Opus 4.8 at the same standard rates and

@@ -258,7 +258,7 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
   storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3', value_json = ? WHERE revision = ? AND key = 'pricingRevision'").run(JSON.stringify("packaged-3"), currentRevision);
   storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
   storedBefore.prepare("UPDATE pricing_catalog SET revision = 'packaged-3' WHERE revision = ?").run(currentRevision);
-  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-3' AND model IN ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'claude-opus-5-5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')").run();
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-3' AND model IN ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')").run();
   const insertLegacy = storedBefore.prepare(`
     INSERT INTO pricing_catalog(
       revision, row_id, provider, model, match_mode, variant,
@@ -297,7 +297,7 @@ test("SQLite upgrades legacy managed packaged pricing with temporal GPT-5.6 rows
 
   const migrated = await loadConfiguration(options);
   assert.notEqual(migrated.revision, "packaged-3");
-  assert.equal(migrated.settings.pricingRevision, "packaged-8");
+  assert.equal(migrated.settings.pricingRevision, "packaged-9");
   assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
   assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-sol"));
   assert.ok(migrated.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-luna"));
@@ -360,13 +360,13 @@ test("SQLite packaged-6 upgrade adds September models without reimport", async (
   const revision = storedBefore.prepare("SELECT revision FROM configuration_revisions ORDER BY committed_at_ms DESC LIMIT 1").get().revision;
   storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = ? AND key = 'pricingRevision'")
     .run(JSON.stringify("packaged-6"), revision);
-  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = ? AND model IN ('gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'claude-opus-5-5')")
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = ? AND model IN ('gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5')")
     .run(revision);
   storedBefore.close();
 
   const upgraded = await loadConfiguration(options);
-  assert.equal(upgraded.settings.pricingRevision, "packaged-8");
-  for (const model of ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"]) {
+  assert.equal(upgraded.settings.pricingRevision, "packaged-9");
+  for (const model of ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
     assert.ok(upgraded.prices.some((row) => row.model === model), `${model} added`);
   }
   const storedAfter = new DatabaseSync(db);
@@ -395,14 +395,14 @@ test("SQLite packaged-7 upgrade adds GPT-6.1 Sol without reimport", async () => 
   const revision = storedBefore.prepare("SELECT revision FROM configuration_revisions ORDER BY committed_at_ms DESC LIMIT 1").get().revision;
   storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = ? AND key = 'pricingRevision'")
     .run(JSON.stringify("packaged-7"), revision);
-  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = ? AND model = 'gpt-6.1-sol'")
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = ? AND model IN ('gpt-6.1-sol', 'claude-sonnet-5-5', 'claude-haiku-5-5')")
     .run(revision);
   storedBefore.prepare("UPDATE pricing_catalog SET input = 99 WHERE revision = ? AND model = 'gpt-6-sol'").run(revision);
   storedBefore.close();
 
   const upgraded = await loadConfiguration(options);
-  assert.equal(upgraded.settings.pricingRevision, "packaged-8");
-  for (const model of ["gpt-6.1-sol"]) {
+  assert.equal(upgraded.settings.pricingRevision, "packaged-9");
+  for (const model of ["gpt-6.1-sol", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
     assert.ok(upgraded.prices.some((row) => row.model === model), `${model} added`);
   }
   assert.equal(upgraded.prices.find((row) => row.model === "gpt-6-sol").input, 99);
@@ -410,6 +410,82 @@ test("SQLite packaged-7 upgrade adds GPT-6.1 Sol without reimport", async () => 
   assert.equal(report.total.pricedRequests, 1);
   assert.equal(report.total.costUsd, 0.041);
   assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
+  const storedAfter = new DatabaseSync(db);
+  try {
+    assert.deepEqual({ ...storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get() }, { ...sourceBefore });
+    assert.equal(storedAfter.prepare("SELECT COUNT(*) AS count FROM configuration_revisions").get().count, 2);
+  } finally {
+    storedAfter.close();
+  }
+});
+
+test("SQLite packaged-8 upgrade adds Claude 5.5 tariffs and preserves local configuration", async () => {
+  const tmp = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-sqlite-claude55-upgrade-test-"));
+  const db = Path.join(tmp, "tokenomics.sqlite");
+  const jsonl = Path.join(tmp, "session.jsonl");
+  fs.writeFileSync(jsonl, "{}\n");
+  const options = defaultOptions({ db, paths: [jsonl] });
+
+  await syncDatabase(options);
+  const storedBefore = new DatabaseSync(db);
+  const sourceBefore = storedBefore.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get();
+  const initialRevision = storedBefore.prepare("SELECT revision FROM configuration_revisions ORDER BY committed_at_ms DESC LIMIT 1").get().revision;
+  storedBefore.prepare("UPDATE configuration_revisions SET revision = 'packaged-8' WHERE revision = ?").run(initialRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET revision = 'packaged-8' WHERE revision = ?").run(initialRevision);
+  storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = 'packaged-8' AND key = 'pricingRevision'")
+    .run(JSON.stringify("packaged-8"));
+  storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = 'packaged-8' AND key = 'openaiContext'")
+    .run(JSON.stringify("long"));
+  storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = 'packaged-8' AND key = 'regionalMultiplier'")
+    .run(JSON.stringify(1.25));
+  storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = 'packaged-8' AND key = 'monthlyCostLimitUsd'")
+    .run(JSON.stringify(250));
+  storedBefore.prepare("UPDATE analytics_settings SET value_json = ? WHERE revision = 'packaged-8' AND key = 'usageProfile'")
+    .run(JSON.stringify({ id: "preserved-profile", name: "Preserved API profile", mode: "api" }));
+  storedBefore.prepare("UPDATE pricing_catalog SET revision = 'packaged-8' WHERE revision = ?").run(initialRevision);
+  storedBefore.prepare("DELETE FROM pricing_catalog WHERE revision = 'packaged-8' AND model IN ('claude-sonnet-5-5', 'claude-haiku-5-5')").run();
+  storedBefore.prepare("UPDATE pricing_catalog SET input = 123 WHERE revision = 'packaged-8' AND model = 'claude-opus-4-8'").run();
+  storedBefore.prepare(`
+    INSERT INTO pricing_catalog(
+      revision, row_id, provider, model, match_mode, variant,
+      effective_from, effective_until, input, cache_create_5m,
+      cache_create_30m, cache_create_1h, cache_read, output, source_url
+    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    "packaged-8",
+    "acme-ai:acme-reasoner:standard::",
+    "acme-ai",
+    "acme-reasoner",
+    "exact",
+    "standard",
+    null,
+    null,
+    3,
+    null,
+    null,
+    null,
+    0.3,
+    9,
+    "https://example.invalid/pricing",
+  );
+  storedBefore.close();
+
+  const upgraded = await loadConfiguration(options);
+  assert.equal(upgraded.settings.pricingRevision, "packaged-9");
+  assert.equal(upgraded.settings.openaiContext, "long");
+  assert.equal(upgraded.settings.regionalMultiplier, 1.25);
+  assert.equal(upgraded.settings.monthlyCostLimitUsd, 250);
+  assert.deepEqual(upgraded.settings.usageProfile, {
+    id: "preserved-profile",
+    name: "Preserved API profile",
+    mode: "api",
+  });
+  assert.equal(upgraded.prices.find((row) => row.model === "claude-opus-4-8").input, 123);
+  assert.ok(upgraded.prices.some((row) => row.model === "claude-sonnet-5-5"));
+  assert.equal(upgraded.prices.filter((row) => row.model === "claude-haiku-5-5").length, 2);
+  assert.equal(upgraded.prices.find((row) => row.provider === "acme-ai").input, 3);
+  assert.equal((await loadConfiguration(options)).revision, upgraded.revision, "migration is idempotent");
+
   const storedAfter = new DatabaseSync(db);
   try {
     assert.deepEqual({ ...storedAfter.prepare("SELECT source_path, fingerprint, imported_at FROM sources").get() }, { ...sourceBefore });
@@ -479,7 +555,7 @@ test("SQLite upgrades packaged-5 auto-review pricing without reimport", async ()
 
   const upgraded = await loadConfiguration(options);
   const autoReviewRows = upgraded.prices.filter((row) => row.model === "codex-auto-review");
-  assert.equal(upgraded.settings.pricingRevision, "packaged-8");
+  assert.equal(upgraded.settings.pricingRevision, "packaged-9");
   assert.equal(autoReviewRows.length, 2);
   assert.ok(autoReviewRows.some((row) => row.effectiveUntil === "2026-08-06T23:59:59.999Z" && row.input === 2.5));
   assert.ok(autoReviewRows.some((row) => row.effectiveFrom === "2026-08-07T00:00:00.000Z" && row.input === 0.2));

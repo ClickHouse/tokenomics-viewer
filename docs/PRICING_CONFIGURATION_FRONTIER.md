@@ -23,6 +23,11 @@ manual derivation-version discipline.
   `effectiveUntil` bounds. Event timestamps select the applicable row; the
   GPT-5.6 Luna/Terra legacy rates end at `2026-07-29T23:59:59.999Z`, and the
   current standard rates begin at `2026-07-30T00:00:00.000Z`.
+- Packaged-9 adds Claude Sonnet 5.5 from `2026-09-28T00:00:00.000Z` and Haiku
+  5.5 from `2026-10-07T00:00:00.000Z`. Haiku selects its higher tariff only
+  when total input exceeds 100,000 tokens, counting uncached input, cache
+  writes, and cache reads; that tier also prices output and does not use the
+  OpenAI context setting or reported context window.
 - A managed packaged revision upgrade promotes legacy timeless Luna/Terra rows
   to the historical interval and appends the current interval in the database.
   SQLite and ClickHouse perform this migration without rereading source bytes;
@@ -146,6 +151,10 @@ manual derivation-version discipline.
   admitted boundary select the expected Luna/Terra rates for both short and long
   contexts; managed SQLite/ClickHouse upgrades yield four historical and four
   current rows per model without source reimport.
+- Claude Haiku 5.5: 99,999 and 100,000 total prompt tokens use the standard
+  tariff, while 100,001 uses the higher tariff for every token bucket; cache
+  reads/writes count toward the threshold, output and OpenAI context settings do
+  not, and SQLite/ClickHouse pricing agrees.
 - Legacy fingerprint: obsolete pricing fields are ignored without causing a
   one-time full reimport.
 - ClickHouse publication failure: a missing overlay or failed repricing query

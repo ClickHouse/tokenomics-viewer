@@ -98,11 +98,13 @@ test("GPT-6.1 Sol profile mode changes invalidate pricing but profile labels do 
 });
 
 test("packaged-7 catalog is recognized and upgraded without replacing edited tariffs", () => {
-  const previous = defaultConfiguration().prices.filter((row) => row.model !== model);
+  const previous = defaultConfiguration().prices.filter((row) => ![
+    model, "claude-sonnet-5-5", "claude-haiku-5-5",
+  ].includes(row.model));
   assert.equal(packagedPricingCatalogRevision(previous), "packaged-7");
   const edited = previous.map((row) => row.model === "gpt-6-sol" ? { ...row, input: 99 } : row);
   const upgraded = normalizeConfiguration({ revision: "old-7", settings: { ...defaultConfiguration().settings, pricingRevision: "packaged-7" }, prices: edited });
-  assert.equal(upgraded.settings.pricingRevision, "packaged-8");
+  assert.equal(upgraded.settings.pricingRevision, "packaged-9");
   for (const row of edited) assert.deepEqual(upgraded.prices.find((candidate) => candidate.id === row.id), row);
   for (const variant of ["short", "long"]) {
     const row = upgraded.prices.find((candidate) => candidate.model === model && candidate.variant === variant);
@@ -111,7 +113,7 @@ test("packaged-7 catalog is recognized and upgraded without replacing edited tar
     assert.equal(row.sourceUrl, "https://developers.openai.com/api/docs/models/gpt-6.1-sol");
     for (const [field, value] of Object.entries(rates[variant])) assert.equal(row[field], value);
   }
-  assert.equal(packagedPricingCatalogRevision(defaultConfiguration().prices), "packaged-8");
+  assert.equal(packagedPricingCatalogRevision(defaultConfiguration().prices), "packaged-9");
   const custom = normalizeConfiguration({ revision: "custom-7", settings: { ...defaultConfiguration().settings, pricingBasis: "custom", pricingRevision: "custom-7" }, prices: edited });
   assert.deepEqual(custom.prices, edited);
   assert.equal(custom.settings.pricingRevision, "custom-7");
