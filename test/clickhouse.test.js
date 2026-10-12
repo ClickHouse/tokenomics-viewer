@@ -20,6 +20,7 @@ const {
 } = require("../lib/ingest/parser");
 const { createClickHouseBackend } = require("../lib/storage/clickhouse");
 const { defaultOptions } = require("./support/fixtures");
+const { claudeHistoryRecord } = require("./support/claude-history");
 
 function createSessionFile({ rows, project = "/tmp/project-clickhouse-test", sessionId = "019f4973-7053-7623-a798-0e4cf81ef014", parentSessionId = null }) {
   const filename = Path.join(fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-session-test-")), "session.jsonl");
@@ -550,7 +551,7 @@ test("ClickHouse packaged pricing upgrade publishes Opus 5 overlays before the r
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -592,7 +593,7 @@ test("ClickHouse packaged-6 upgrade publishes September model pricing before the
     const upgraded = await loadConfiguration(options);
     const requests = mock.requests.slice(before);
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
     for (const model of septemberModels) assert.ok(upgraded.prices.some((row) => row.model === model));
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -632,7 +633,7 @@ test("ClickHouse packaged-7 upgrade publishes GPT-6.1 Sol pricing before the rev
     const upgraded = await loadConfiguration(options);
     const requests = mock.requests.slice(before);
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
     for (const model of newModels) assert.ok(upgraded.prices.some((row) => row.model === model));
     assert.equal(upgraded.prices.find((row) => row.model === "gpt-6-sol").input, 99);
     assert.deepEqual(mock.activeRows.sources, sourcesBefore);
@@ -714,7 +715,7 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
       .filter((row) => temporalModels.has(row.model) && row.effective_from === currentFrom)
       .map((row) => [`${row.model}:${row.variant}`, row]));
     mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
-      if (["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"].includes(row.model)) return [];
+      if (["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"].includes(row.model)) return [];
       if (row.model === "gpt-5.6-sol") {
         if (row.effective_until !== "2026-08-20T23:59:59.999Z") return [];
         return [{
@@ -747,7 +748,7 @@ test("ClickHouse packaged-3 migration materializes temporal Luna and Terra rows 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
     assert.ok(upgraded.prices.some((row) => row.provider === "anthropic" && row.model === "claude-opus-5"));
     assert.ok(upgraded.prices.some((row) => row.provider === "openai" && row.model === "gpt-6-astra"));
     const solRows = upgraded.prices.filter((row) => row.provider === "openai" && row.model === "gpt-5.6-sol");
@@ -793,7 +794,7 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
       if (row.key === "pricingRevision") row.value_json = JSON.stringify(legacyPricingRevision);
     }
     mock.activeRows.pricing_catalog = mock.activeRows.pricing_catalog.flatMap((row) => {
-      if (["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"].includes(row.model)) return [];
+      if (["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"].includes(row.model)) return [];
       if (row.model === "gpt-5.6-sol") {
         if (row.effective_until !== "2026-08-20T23:59:59.999Z") return [];
         return [{
@@ -848,7 +849,7 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
     assert.ok(requests.some((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs")));
-    assert.match(upgraded.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
 
     const stableStart = mock.requests.length;
     assert.equal((await loadConfiguration(options)).revision, upgraded.revision);
@@ -861,18 +862,18 @@ test("ClickHouse repairs a chained derived packaged migration only for an unchan
     assert.equal(mock.requests.slice(futureProjectionStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     futureMetadata.pricing_projection_revision = "2";
-    futureMetadata.packaged_revision = "packaged-9";
+    futureMetadata.packaged_revision = "packaged-10";
     const futurePackageStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-9 is newer than packaged-8/);
+    await assert.rejects(loadConfiguration(options), /packaged pricing revision packaged-10 is newer than packaged-9/);
     assert.equal(mock.requests.slice(futurePackageStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
 
     mock.activeRows.configuration_metadata = mock.activeRows.configuration_metadata
       .filter((row) => row.revision !== upgraded.revision);
     mock.activeRows.analytics_settings.find((row) => (
       row.revision === upgraded.revision && row.key === "pricingRevision"
-    )).value_json = JSON.stringify(`packaged-9:${"e".repeat(32)}`);
+    )).value_json = JSON.stringify(`packaged-10:${"e".repeat(32)}`);
     const futurePublicStart = mock.requests.length;
-    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-9:.* is newer than packaged-8/);
+    await assert.rejects(loadConfiguration(options), /stored packaged pricing revision packaged-10:.* is newer than packaged-9/);
     assert.equal(mock.requests.slice(futurePublicStart).some((request) => request.query.trimStart().startsWith("INSERT INTO")), false);
   });
 });
@@ -904,7 +905,7 @@ test("ClickHouse rebuilds managed overlays when projection metadata is stale", a
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
     const rateLimitOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO rate_limit_sample_costs"));
@@ -941,7 +942,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     const requests = mock.requests.slice(before);
 
     assert.notEqual(upgraded.revision, legacyRevision);
-    assert.match(upgraded.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(upgraded.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
     assert.equal(upgraded.settings.monthlyCostLimitUsd, 321);
     assert.equal(requests.some((request) => request.query.startsWith("INSERT INTO sources")), false);
     const usageOverlay = requests.findIndex((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs"));
@@ -950,7 +951,7 @@ test("ClickHouse restores managed provenance after an old profile-only writer", 
     assert.match(requests[usageOverlay].query, /parseDateTime64BestEffortOrNull\(toString\(raw\.timestamp\)\)/);
     assert.ok(mock.activeRows.configuration_metadata.some((row) => (
       row.revision === upgraded.revision && row.managed_pricing === 1 &&
-      row.packaged_revision === "packaged-8" && row.pricing_projection_revision === "2"
+      row.packaged_revision === "packaged-9" && row.pricing_projection_revision === "2"
     )));
 
     const stableStart = mock.requests.length;
@@ -1026,7 +1027,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     await loadConfiguration(options);
 
     const legacyRevision = "81fbbf48-6215-419b-bffb-ddd36a1e96d4";
-    const legacyPricingRevision = "packaged-8:fd7377f5073cecef6e9f9b83e190c1c4";
+    const legacyPricingRevision = "packaged-9:fd7377f5073cecef6e9f9b83e190c1c4";
     const historicalUntil = "2026-07-29T23:59:59.999Z";
     const temporalModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
     mock.activeRows.configuration_revisions[0].revision = legacyRevision;
@@ -1081,7 +1082,7 @@ test("ClickHouse preserves edited standard rows while rebasing only older derive
     const rebasedLuna = rebased.prices.find((row) => row.model === "gpt-5.6-luna" && row.variant === "short");
 
     assert.notEqual(rebased.revision, legacyRevision);
-    assert.match(rebased.settings.pricingRevision, /^packaged-8:[0-9a-f]{32}$/);
+    assert.match(rebased.settings.pricingRevision, /^packaged-9:[0-9a-f]{32}$/);
     assert.equal(rebasedLuna.input, 99);
     assert.equal(rebased.prices.some((row) => row.effectiveFrom === "2026-07-30T00:00:00.000Z"), false);
     assert.ok(rebaseRequests.some((request) => request.query.trimStart().startsWith("INSERT INTO usage_event_costs")));
@@ -1807,6 +1808,98 @@ test("ClickHouse append storage stays linear beyond the former 128-segment bound
     assert.match(manifestQuery, /tuple\(manifest\.committed_at_ms, manifest\.generation_id\) > checkpoint\.boundary/);
     assert.equal(mock.activeRows.usage_events.filter((row) => row.source_path === changing).length, 131);
     assert.equal(mock.visibleRows("usage_events").filter((row) => row.source_path === changing).length, 131);
+  });
+});
+
+test("ClickHouse excludes Claude history copies without losing billed usage", async () => {
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-claude-history-"));
+  const original = Path.join(dir, "original.jsonl");
+  const copy = Path.join(dir, "copy.jsonl");
+  fs.writeFileSync(original, `${claudeHistoryRecord()}\n`);
+  fs.writeFileSync(copy, `${claudeHistoryRecord({ replay: true })}\n`);
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const report = await syncDatabase(defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_claude_history_test",
+      paths: [original, copy],
+      progress: false,
+    }));
+    assert.equal(report.total.requests, 1);
+    assert.equal(report.sources.conflictingUsageEvents, 0);
+    const rows = mock.visibleRows("usage_events");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].input, 2);
+    assert.equal(rows[0].cache_create_5m, 2618);
+    assert.equal(rows[0].cache_read, 86024);
+    assert.equal(rows[0].output, 12437);
+  });
+});
+
+test("ClickHouse replaces legacy Claude history rows once through a new import manifest", async () => {
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-claude-history-replay-"));
+  const original = Path.join(dir, "original.jsonl");
+  const copy = Path.join(dir, "copy.jsonl");
+  fs.writeFileSync(original, `${claudeHistoryRecord()}\n`);
+  fs.writeFileSync(copy, `${claudeHistoryRecord({ replay: true })}\n`);
+  const mock = createClickHouseServer();
+
+  await withServer(mock, async (url) => {
+    const options = defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_claude_history_replay_test",
+      paths: [original, copy],
+      progress: false,
+    });
+    await syncDatabase(options);
+    const originalRow = mock.visibleRows("usage_events")[0];
+    const copySource = mock.visibleRows("sources").find((row) => row.source_path === copy);
+    mock.activeRows.usage_events.push({
+      ...originalRow,
+      source_path: copy,
+      import_id: copySource.import_id,
+      segment_end: copySource.segment_end,
+      input: 0,
+      cache_read: 0,
+      output: 0,
+      reasoning_output: 0,
+    });
+    for (const source of mock.visibleRows("sources")) {
+      source.fingerprint = source.fingerprint.replace(
+        `analyticsDerivationVersion=${ANALYTICS_DERIVATION_VERSION}`,
+        "analyticsDerivationVersion=8",
+      );
+    }
+    await assert.rejects(buildReportFromClickHouse(options), /Conflicting stored usage events: 1/);
+
+    const report = await syncDatabase(options);
+    assert.equal(report.total.requests, 1);
+    assert.equal(mock.visibleRows("usage_events").length, 1);
+    assert.equal(mock.activeRows.usage_events.length, 3, "old physical rows remain outside the active manifest");
+    assert.notEqual(mock.visibleRows("sources").find((row) => row.source_path === copy).import_id, copySource.import_id);
+    const generations = mock.activeRows.import_generations.length;
+    await syncDatabase(options);
+    assert.equal(mock.activeRows.import_generations.length, generations, "unchanged sources replay only once");
+  });
+});
+
+test("ClickHouse rejects genuinely conflicting nonzero Claude usage", async () => {
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), "tokenomics-ch-claude-conflict-"));
+  const paths = [Path.join(dir, "first.jsonl"), Path.join(dir, "second.jsonl")];
+  fs.writeFileSync(paths[0], `${claudeHistoryRecord()}\n`);
+  fs.writeFileSync(paths[1], `${claudeHistoryRecord({ input: 3 })}\n`);
+  const mock = createClickHouseServer();
+  await withServer(mock, async (url) => {
+    await assert.rejects(syncDatabase(defaultOptions({
+      dbEngine: "clickhouse",
+      clickhouseUrl: url,
+      clickhouseDatabase: "tokenomics_claude_conflict_test",
+      paths,
+      progress: false,
+    })), /Conflicting stored usage events: 1/);
   });
 });
 
